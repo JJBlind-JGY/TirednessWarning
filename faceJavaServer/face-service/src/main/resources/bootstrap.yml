@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: faceservice
+app:
+  camera:
+    config-file: config/camera-config.json
+  personnel:
+    config-file: config/personnel-config.json
+  rtsp:
+    url: rtsp://192.168.1.8:554/type=0&id=3
+  user:
+    id: camera_001

@@ -1,0 +1,9 @@
+port: 8765
+url: 0.0.0.0
+task_workers: 2
+model_instances: 2
+executor_workers: 4
+cert_path: ./certs/server-cert.pem
+key_path: ./certs/server-key.pem
+
+

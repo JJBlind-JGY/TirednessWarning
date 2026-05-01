@@ -1,0 +1,5 @@
+server:
+  ssl:
+    enabled: true
+    certificate: classpath:cert/server-cert.pem
+    certificate-private-key: classpath:cert/server-key.pem

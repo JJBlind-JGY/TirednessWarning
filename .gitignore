@@ -1,0 +1,50 @@
+# ========================
+# Runtime & Config
+# ========================
+faceJavaServer/config/
+*.log
+
+# ========================
+# Java
+# ========================
+**/target/
+
+# ========================
+# Frontend
+# ========================
+**/node_modules/
+**/dist/
+**/dist-ssr/
+
+# ========================
+# Python
+# ========================
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/venv/
+**/.env/
+
+# ========================
+# IDE / OS
+# ========================
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# ========================
+# Dev logs
+# ========================
+vite-dev*.log
+
+# ========================
+# Large data / models
+# ========================
+facePythonServer/video/
+facePythonServer/face_recognition_repo/results/
+
+### model.pt is a large file that contains the trained model weights. It is not necessary to include it in version control, as it can be generated from the training process. Additionally, it may contain sensitive information or be too large for efficient storage in a Git repository. Therefore, it is best to exclude it from version control by adding it to the .gitignore file.
+facePythonServer/model.pt
+facePythonServer/face_recognition_repo/face_recognition_models/

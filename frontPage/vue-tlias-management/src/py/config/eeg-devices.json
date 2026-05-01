@@ -1,0 +1,9 @@
+[
+  {
+    "workerId": 1,
+    "value": 1,
+    "name": "EGG_1",
+    "port": "COM1",
+    "enabled": true
+  }
+]

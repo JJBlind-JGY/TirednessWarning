@@ -1,0 +1,10 @@
+spring:
+
+
+  application:
+    name: faceservice
+app:
+  rtsp:
+    url: rtsp://127.0.0.1:8554/live  # 你的视频流地址
+  user:
+    id: camera_001                                # 自定义的用户ID
