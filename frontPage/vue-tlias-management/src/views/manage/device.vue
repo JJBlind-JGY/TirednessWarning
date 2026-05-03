@@ -29,7 +29,8 @@ const cameraForm = reactive({
   id: '',
   originalId: '',
   name: '',
-  rtspUrl: ''
+  rtspUrl: '',
+  streamName: ''
 })
 
 function resetEegForm() {
@@ -43,6 +44,7 @@ function resetCameraForm() {
   cameraForm.originalId = ''
   cameraForm.name = ''
   cameraForm.rtspUrl = ''
+  cameraForm.streamName = ''
 }
 
 async function submitEegForm() {
@@ -86,7 +88,8 @@ async function submitCameraForm() {
   const payload = {
     id: cameraForm.id,
     name: cameraForm.name,
-    rtspUrl: cameraForm.rtspUrl
+    rtspUrl: cameraForm.rtspUrl,
+    streamName: cameraForm.streamName || cameraForm.id
   }
 
   try {
@@ -131,6 +134,7 @@ function editCameraRow(row) {
   cameraForm.originalId = row.id
   cameraForm.name = row.name
   cameraForm.rtspUrl = row.rtspUrl
+  cameraForm.streamName = row.streamName || row.id
 }
 
 async function removeCameraRow(row) {
@@ -187,6 +191,9 @@ async function removeCameraRow(row) {
           </el-form-item>
           <el-form-item label="RTSP 地址">
             <el-input v-model="cameraForm.rtspUrl" placeholder="rtsp://192.168.1.8:554/type=0&id=3" />
+          </el-form-item>
+          <el-form-item label="go2rtc stream">
+            <el-input v-model="cameraForm.streamName" placeholder="optional, default camera id" />
           </el-form-item>
         </div>
         <div class="form-actions">

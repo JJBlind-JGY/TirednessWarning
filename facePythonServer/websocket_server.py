@@ -1,29 +1,30 @@
 import asyncio
 import json
 import base64
-import math
-import random
-import ssl
+import os
 from concurrent.futures import ThreadPoolExecutor
 import yaml
-import cv2
-import numpy as np
-import torch
-import torchvision.models as models
-import torch.nn as nn
 import websockets
 
-from queue import Queue
-
-from PIL import Image
-from torchvision import transforms
-from face_recognition_repo.src.utils import process_image_to_bytes
+from face_emotion_model import DEFAULT_EMOTION_MODEL, DEFAULT_YUNET_MODEL, YuNetEmotiEffRecognizer
 
 
 import warnings
 # warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore")
 executor = None
+recognizer = None
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def resolve_local_path(path):
+    if not path:
+        return path
+    if os.path.isabs(path):
+        return path
+    return os.path.join(BASE_DIR, path)
 
 
 class ModelPool:
@@ -72,6 +73,36 @@ async def process_tasks():
     while True:
         # 从队列中获取任务
         user_id, frame_data, websocket = await task_queue.get()
+
+        result = await asyncio.get_running_loop().run_in_executor(
+            executor,
+            recognizer.predict_from_bytes,
+            frame_data,
+            True,
+            '.jpg'
+        )
+        image_b64 = ""
+        if result.image_bytes is not None:
+            image_b64 = base64.b64encode(result.image_bytes).decode('utf-8')
+
+        response = {
+            "status": result.status,
+            "userId": user_id,
+            "arousal": round(10 - result.fatigue_index, 3),
+            "valence": 5,
+            "emotionId": result.emotion_id,
+            "emotion5": result.emotion5,
+            "emotionCat": result.emotion5_zh,
+            "emotion7": result.emotion7,
+            "score": round(result.score, 3),
+            "fatigueIndex": round(result.fatigue_index, 3),
+            "fatigueRank": result.fatigue_rank,
+            "faceBox": result.face_box,
+            "scores7": result.scores7,
+            "image": image_b64,
+        }
+        await websocket.send(json.dumps(response, ensure_ascii=False))
+        continue
 
         # print('get data from queue')
         # 处理视频帧
@@ -281,11 +312,14 @@ async def main():
 
 if __name__ == "__main__":
     config = read_config('config.yaml') or {}
-    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    max_model_num = max(1, int(config.get('model_instances', 1)))
-    executor_workers = max(1, int(config.get('executor_workers', max_model_num)))
+    executor_workers = max(1, int(config.get('executor_workers', 2)))
     executor = ThreadPoolExecutor(max_workers=executor_workers)
-    pool = ModelPool(max_model_num)
+    recognizer = YuNetEmotiEffRecognizer(
+        yunet_model=resolve_local_path(config.get('yunet_model', DEFAULT_YUNET_MODEL)),
+        emotion_model=resolve_local_path(config.get('emotion_model', DEFAULT_EMOTION_MODEL)),
+        input_size=int(config.get('emotion_input_size', 260)),
+        face_score_threshold=float(config.get('face_score_threshold', 0.7)),
+    )
     # 创建一个线程池执行器
     # executor = ThreadPoolExecutor(max_workers=10)
     #

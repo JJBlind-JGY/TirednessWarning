@@ -7,14 +7,20 @@ public class CameraConfig {
     private String id;
     private String name;
     private String rtspUrl;
+    private String streamName;
 
     public CameraConfig() {
     }
 
     public CameraConfig(String id, String name, String rtspUrl) {
+        this(id, name, rtspUrl, id);
+    }
+
+    public CameraConfig(String id, String name, String rtspUrl, String streamName) {
         this.id = id;
         this.name = name;
         this.rtspUrl = rtspUrl;
+        this.streamName = streamName;
     }
 
     public String getId() {
@@ -41,4 +47,11 @@ public class CameraConfig {
         this.rtspUrl = rtspUrl;
     }
 
+    public String getStreamName() {
+        return streamName;
+    }
+
+    public void setStreamName(String streamName) {
+        this.streamName = streamName;
+    }
 }

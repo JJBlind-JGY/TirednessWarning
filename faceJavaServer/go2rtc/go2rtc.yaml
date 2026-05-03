@@ -1,0 +1,9 @@
+streams:
+  camera_01:
+    - rtsp://192.168.1.8:554/type=0&id=3
+
+webrtc:
+  listen: :1984
+
+api:
+  listen: :1984

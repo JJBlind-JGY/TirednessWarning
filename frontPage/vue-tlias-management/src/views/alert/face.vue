@@ -6,12 +6,24 @@ import { useMonitorCenter } from './useMonitorCenter'
 const route = useRoute()
 const router = useRouter()
 
-const { state, useMonitorCenterPage, getBindingById, getDeviceLabel, getCameraLabel } = useMonitorCenter()
+const {
+  state,
+  CAMERA_OPTIONS,
+  useMonitorCenterPage,
+  getBindingById,
+  getDeviceLabel,
+  getCameraLabel,
+  getDisplayEmotion,
+  getWarningText,
+  getAlertType
+} = useMonitorCenter()
 
 useMonitorCenterPage()
 
 const selectedBindingId = computed(() => route.params.id || route.query.binding || state.bindings[0]?.id || '')
 const binding = computed(() => getBindingById(selectedBindingId.value))
+const selectedCamera = computed(() => CAMERA_OPTIONS.find((item) => item.id === binding.value?.faceChannelId))
+const streamUrl = computed(() => selectedCamera.value?.streamUrl || '')
 
 function openBinding(bindingId) {
   if (!bindingId) return
@@ -31,8 +43,8 @@ function openBinding(bindingId) {
         <h1>{{ binding.personName || '未绑定人员' }} / {{ getDeviceLabel(binding.workerId) }} / {{ getCameraLabel(binding.faceChannelId) }}</h1>
       </div>
       <div class="hero-actions">
+        <el-tag :type="getAlertType(binding)" effect="dark">综合状态：{{ getDisplayEmotion(binding) }}</el-tag>
         <el-tag :type="binding.faceConnected ? 'success' : 'info'">{{ binding.faceConnected ? '视频在线' : '等待画面' }}</el-tag>
-        <el-tag type="warning">1080P</el-tag>
         <el-button @click="router.push(`/alert/device/${binding.id}`)">返回详情</el-button>
       </div>
     </section>
@@ -51,6 +63,7 @@ function openBinding(bindingId) {
       </div>
 
       <div class="video-head">
+        <div class="resolution-chip">综合状态：{{ getDisplayEmotion(binding) }}</div>
         <div>
           <h3>实时视频流</h3>
           <p>当前页面固定展示为 1080P 标准视图。</p>
@@ -59,8 +72,16 @@ function openBinding(bindingId) {
       </div>
 
       <div class="video-stage">
+        <iframe
+          v-if="streamUrl"
+          class="face-stream"
+          :src="streamUrl"
+          allow="autoplay; fullscreen; picture-in-picture"
+          allowfullscreen
+        ></iframe>
+
         <el-image
-          v-if="binding.faceImageUrl"
+          v-else-if="binding.faceImageUrl"
           :src="binding.faceImageUrl"
           fit="contain"
           :preview-src-list="[binding.faceImageUrl]"
@@ -190,6 +211,7 @@ function openBinding(bindingId) {
 .face-stream {
   width: 100%;
   height: 640px;
+  border: 0;
 }
 
 .face-stream :deep(.el-image__inner) {
@@ -222,6 +244,15 @@ function openBinding(bindingId) {
 
 .stream-placeholder span {
   color: rgba(212, 228, 239, 0.72);
+}
+
+.stream-debug {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 12px;
+  word-break: break-all;
 }
 
 .empty-wrap {

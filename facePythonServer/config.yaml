@@ -3,6 +3,10 @@ url: 0.0.0.0
 task_workers: 2
 model_instances: 2
 executor_workers: 4
+yunet_model: ./models/face_detection_yunet_2023mar.onnx
+emotion_model: ./models/enet_b2_7.onnx
+emotion_input_size: 260
+face_score_threshold: 0.7
 cert_path: ./certs/server-cert.pem
 key_path: ./certs/server-key.pem
 

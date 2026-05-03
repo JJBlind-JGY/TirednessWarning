@@ -5,5 +5,12 @@
     "name": "EGG_1",
     "port": "COM1",
     "enabled": true
+  },
+  {
+    "workerId": 2,
+    "value": 2,
+    "name": "EGG_5",
+    "port": "COM5",
+    "enabled": true
   }
 ]

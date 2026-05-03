@@ -1,5 +1,6 @@
 package com.server.faceservice.utils;
 
+import com.alibaba.fastjson.JSONObject;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,13 +12,16 @@ import org.springframework.stereotype.Component;
 @Component
 public class ModelMessageHandler {
     @Value("${websocket.webUser.url}")
-    private   String faceFatigueUrl;
+    private String faceFatigueUrl;
+
     private static final Logger logger = LoggerFactory.getLogger(ModelMessageHandler.class);
-    private SimpMessagingTemplate messagingTemplate;
+    private final SimpMessagingTemplate messagingTemplate;
+
     @Autowired
-    ModelMessageHandler(SimpMessagingTemplate messagingTemplate){
+    ModelMessageHandler(SimpMessagingTemplate messagingTemplate) {
         this.messagingTemplate = messagingTemplate;
     }
+
     @PostConstruct
     public void init() {
         if (faceFatigueUrl == null) {
@@ -27,65 +31,114 @@ public class ModelMessageHandler {
             logger.error("messagingTemplate is null");
         }
     }
-    public void handleProcessedData(String fatigueRank, String userId,String fatigueIndex, String emotionCat, String score, String image) {
-        score = score.substring(0, 4) + "%";
-        double rate = 92 + Math.random() * 2;
-        String rateString = String.valueOf(rate).substring(0, 4) + "%";
+
+    public void handleModelPayload(JSONObject json) {
+        String userId = json.getString("userId");
+        if (userId == null || userId.isBlank()) {
+            logger.warn("drop face model payload without userId");
+            return;
+        }
+
+        String status = valueOrDefault(json.getString("status"), "ok");
+        String emotion5 = json.getString("emotion5");
+        String emotionCat = json.getString("emotionCat");
+        String score = normalizeScore(json.get("score"));
+        String fatigueIndex = normalizeNumber(json.get("fatigueIndex"));
+        String fatigueRank = normalizeNumber(json.get("fatigueRank"));
+        Object faceBox = json.get("faceBox");
+        Object scores7 = json.get("scores7");
+        String image = json.getString("image");
+
+        WebMessage response = new WebMessage(
+                userId,
+                status,
+                emotion5,
+                emotionCat,
+                score,
+                fatigueIndex,
+                fatigueRank,
+                faceBox,
+                scores7,
+                System.currentTimeMillis(),
+                image
+        );
+        messagingTemplate.convertAndSend(faceFatigueUrl + userId, response);
+        logger.info("face model result pushed: userId={}, status={}, emotion5={}, emotionCat={}, score={}",
+                userId, status, emotion5, emotionCat, score);
+    }
+
+    public void handleProcessedData(String fatigueRank, String userId, String fatigueIndex, String emotionCat, String score, String image) {
+        JSONObject json = new JSONObject();
+        json.put("userId", userId);
+        json.put("status", "ok");
+        json.put("emotionCat", emotionCat);
+        json.put("score", score);
+        json.put("fatigueIndex", fatigueIndex);
+        json.put("fatigueRank", fatigueRank);
+        json.put("image", image);
+        handleModelPayload(json);
+    }
+
+    private String valueOrDefault(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private String normalizeNumber(Object value) {
+        return value == null ? "--" : String.valueOf(value);
+    }
+
+    private String normalizeScore(Object value) {
+        if (value == null) {
+            return "--";
+        }
         try {
-            // 构造标准化响应对象
-            WebMessage response = new WebMessage(
-                    userId,
-                    fatigueRank,
-                    fatigueIndex,
-                    emotionCat,
-                    System.currentTimeMillis(),
-                    score,
-                    rateString,
-                    image
-            );
-            // 发送到公共主题（广播）
-            messagingTemplate.convertAndSend(faceFatigueUrl+userId, response);
-
-            logger.info("已推送疲劳数据到客户端 | 用户: {} | 疲劳指数: {} | 疲劳等级: {} | 情绪类型: {} | 本次检测准确率: {} | 综合检测准确率: {}", userId, fatigueIndex,fatigueRank,emotionCat,score,rateString);
-
-
+            double numeric = Double.parseDouble(String.valueOf(value).replace("%", ""));
+            return String.format("%.1f", numeric);
         } catch (Exception e) {
-            logger.error("消息推送失败: {}", e.getMessage());
+            String score = String.valueOf(value);
+            return score.isBlank() ? "--" : score.replace("%", "");
         }
     }
 }
+
 class WebMessage {
-//    消息对象
     private final String userId;
-    private final String fatigueRank;
-    private final long timestamp;
-    private final String fatigueIndex;
+    private final String status;
+    private final String emotion5;
     private final String emotionCat;
     private final String score;
-    private final String rate;
+    private final String fatigueIndex;
+    private final String fatigueRank;
+    private final Object faceBox;
+    private final Object scores7;
+    private final long timestamp;
     private final String image;
-    public WebMessage(String userId, String fatigueRank, String fatigueIndex,String emotionCat,long timestamp,String score, String rate,String image) {
+
+    public WebMessage(String userId, String status, String emotion5, String emotionCat, String score,
+                      String fatigueIndex, String fatigueRank, Object faceBox, Object scores7,
+                      long timestamp, String image) {
         this.userId = userId;
-        this.fatigueRank = fatigueRank;
-        this.fatigueIndex = fatigueIndex;
-        this.timestamp = timestamp;
+        this.status = status;
+        this.emotion5 = emotion5;
         this.emotionCat = emotionCat;
         this.score = score;
-        this.rate = rate;
+        this.fatigueIndex = fatigueIndex;
+        this.fatigueRank = fatigueRank;
+        this.faceBox = faceBox;
+        this.scores7 = scores7;
+        this.timestamp = timestamp;
         this.image = image;
     }
 
-    // Getter 方法必须存在以支持JSON序列化
     public String getUserId() { return userId; }
+    public String getStatus() { return status; }
+    public String getEmotion5() { return emotion5; }
+    public String getEmotionCat() { return emotionCat; }
+    public String getScore() { return score; }
+    public String getFatigueIndex() { return fatigueIndex; }
     public String getFatigueRank() { return fatigueRank; }
+    public Object getFaceBox() { return faceBox; }
+    public Object getScores7() { return scores7; }
     public long getTimestamp() { return timestamp; }
-    public String getFatigueIndex(){
-        return fatigueIndex;
-    }
-    public String getEmotionCat(){ return emotionCat;}
-    public String getScore(){
-        return score;
-    }
-    public String getRate(){return rate;}
     public String getImage() { return image; }
 }

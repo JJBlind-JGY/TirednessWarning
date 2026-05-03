@@ -2,7 +2,8 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 
-export const useEegStore = defineStore('eeg', () => {
+/*
+const legacyUseEegStore = defineStore('eeg-legacy', () => {
   // --- 状态 ---
   const rawWave      = ref([])
   const fatigueIndex = ref(0)
@@ -96,6 +97,222 @@ export const useEegStore = defineStore('eeg', () => {
     thetaPower,
     alphaPower,
     betaPower,
+    fatigueLevel,
+    recordHistory,
+    accuracy,
+    startSse,
+    stopSse
+  }
+})
+*/
+
+const EMOTION_TEXT = {
+  normal: '正常',
+  anxiety: '焦虑',
+  stress: '紧张',
+  fatigue: '疲劳',
+  weakness: '虚弱'
+}
+
+function getBandSnapshot(rawPowers = {}) {
+  const delta = Number(rawPowers.delta || 0)
+  const theta = Number(rawPowers.theta || 0)
+  const alpha = Number(rawPowers.low_alpha || 0) + Number(rawPowers.high_alpha || 0)
+  const beta = Number(rawPowers.low_beta || 0) + Number(rawPowers.high_beta || 0)
+  const gamma = Number(rawPowers.low_gamma || 0) + Number(rawPowers.mid_gamma || 0)
+  const total = delta + theta + alpha + beta + gamma
+
+  if (!total) {
+    return { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }
+  }
+
+  return {
+    delta: (delta / total) * 100,
+    theta: (theta / total) * 100,
+    alpha: (alpha / total) * 100,
+    beta: (beta / total) * 100,
+    gamma: (gamma / total) * 100
+  }
+}
+
+export const useEegStore = defineStore('eeg', () => {
+  const rawWave = ref([])
+  const indices = ref({
+    anxiety_idx: 0,
+    stress_idx: 0,
+    fatigue_idx: 0,
+    weakness_idx: 0
+  })
+  const rawPowers = ref({})
+  const features = ref({})
+  const reasonCodes = ref([])
+  const status = ref('idle')
+  const statusText = ref('待接入')
+  const qualityLevel = ref('unknown')
+  const signalQuality = ref(null)
+  const attention = ref(null)
+  const meditation = ref(null)
+  const calibrationProgress = ref(0)
+  const emotion = ref('normal')
+  const emotionZh = ref('正常')
+  const analysisTime = ref('')
+
+  const fatigueIndex = ref(0)
+  const deltaPower = ref(0)
+  const thetaPower = ref(0)
+  const alphaPower = ref(0)
+  const betaPower = ref(0)
+  const gammaPower = ref(0)
+  const fatigueLevel = ref('正常')
+  const accuracy = ref(0)
+  const recordHistory = ref([])
+
+  watch(fatigueIndex, val => {
+    recordHistory.value.push({
+      timestamp: new Date().toLocaleTimeString(),
+      value: val,
+      level: fatigueLevel.value,
+      status: status.value
+    })
+    if (recordHistory.value.length > 100) {
+      recordHistory.value.shift()
+    }
+  })
+
+  let evt = null
+  let reconnectTimer = null
+  let lastParams = null
+
+  function setStatusText(payloadStatus, progress) {
+    if (payloadStatus === 'calibrating') {
+      statusText.value = `基线校准 ${Math.round(progress * 100)}%`
+    } else if (payloadStatus === 'poor_signal') {
+      statusText.value = '信号质量差，保留上次有效判断'
+    } else if (payloadStatus === 'ok') {
+      statusText.value = '在线'
+    } else {
+      statusText.value = '待接入'
+    }
+  }
+
+  function applyPayload(d) {
+    const bandSnapshot = getBandSnapshot(d.raw_powers)
+
+    rawWave.value = Array.isArray(d.raw_wave) ? d.raw_wave : []
+    rawPowers.value = d.raw_powers || {}
+    indices.value = {
+      anxiety_idx: Number(d.indices?.anxiety_idx || 0),
+      stress_idx: Number(d.indices?.stress_idx || 0),
+      fatigue_idx: Number(d.indices?.fatigue_idx || 0),
+      weakness_idx: Number(d.indices?.weakness_idx || 0)
+    }
+    features.value = d.features || {}
+    reasonCodes.value = Array.isArray(d.reason_codes) ? d.reason_codes : []
+    status.value = d.status || 'ok'
+    qualityLevel.value = d.quality_level || 'unknown'
+    signalQuality.value = d.signal_quality ?? null
+    attention.value = d.attention ?? null
+    meditation.value = d.meditation ?? null
+    calibrationProgress.value = Number(d.calibration_progress || 0)
+    emotion.value = d.emotion || emotion.value || 'normal'
+    emotionZh.value = EMOTION_TEXT[emotion.value] || d.emotion_zh || emotionZh.value || '正常'
+    analysisTime.value = d.analysis_time || ''
+    setStatusText(status.value, calibrationProgress.value)
+
+    fatigueIndex.value = Number(indices.value.fatigue_idx || 0)
+    fatigueLevel.value = emotionZh.value
+    deltaPower.value = bandSnapshot.delta
+    thetaPower.value = bandSnapshot.theta
+    alphaPower.value = bandSnapshot.alpha
+    betaPower.value = bandSnapshot.beta
+    gammaPower.value = bandSnapshot.gamma
+    accuracy.value = status.value === 'ok' ? 100 : 0
+  }
+
+  function buildStreamUrl({ workerId, port } = {}) {
+    if (workerId != null && workerId !== '') {
+      return `/eeg/stream?workerId=${encodeURIComponent(workerId)}`
+    }
+    if (port) {
+      return `/eeg/stream?port=${encodeURIComponent(port)}`
+    }
+    return '/eeg/stream'
+  }
+
+  function startSse(params = {}) {
+    stopSse()
+    lastParams = { ...params }
+    const url = buildStreamUrl(params)
+    console.log('[SSE] connect:', url)
+
+    evt = new EventSource(url)
+    status.value = 'connecting'
+    statusText.value = '连接中'
+
+    evt.onopen = () => {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+
+    evt.onmessage = e => {
+      try {
+        applyPayload(JSON.parse(e.data))
+      } catch (err) {
+        console.warn('[SSE] 数据解析失败:', err)
+      }
+    }
+
+    evt.onerror = err => {
+      console.warn('[SSE] 连接错误:', err)
+      evt?.close()
+      evt = null
+      status.value = 'error'
+      statusText.value = '连接失败'
+      scheduleReconnect()
+    }
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer || !lastParams) return
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      startSse(lastParams)
+    }, 5000)
+  }
+
+  function stopSse() {
+    if (evt) {
+      evt.close()
+      evt = null
+    }
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+    status.value = 'idle'
+    statusText.value = '已断开'
+  }
+
+  return {
+    rawWave,
+    indices,
+    rawPowers,
+    features,
+    reasonCodes,
+    status,
+    statusText,
+    qualityLevel,
+    signalQuality,
+    attention,
+    meditation,
+    calibrationProgress,
+    emotion,
+    emotionZh,
+    analysisTime,
+    fatigueIndex,
+    deltaPower,
+    thetaPower,
+    alphaPower,
+    betaPower,
+    gammaPower,
     fatigueLevel,
     recordHistory,
     accuracy,

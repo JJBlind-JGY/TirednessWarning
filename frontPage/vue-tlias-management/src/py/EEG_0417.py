@@ -25,7 +25,7 @@ from datetime import datetime
 import numpy as np
 import serial
 from flask import Flask, Response, request
-from scipy.signal import butter
+from scipy.signal import butter, lfilter, lfilter_zi
 from scipy.special import softmax
 
 
@@ -57,6 +57,14 @@ WINDOW_SIZE = RAW_FS * SAMPLE_SEC
 DOWNSAMPLE_FACTOR = RAW_FS // TARGET_FS
 BP_B, BP_A = butter(4, [1 / (RAW_FS / 2), 40 / (RAW_FS / 2)], btype="band")
 BASELINE_SEC = 30
+MIN_BASELINE_SAMPLES = 10
+NO_CONTACT_SIGNAL_VALUE = 200
+POOR_SIGNAL_THRESHOLD = 100
+STRONG_BAD_CONTACT_SIGNAL_VALUES = {107}
+WEAK_CONTACT_SIGNAL_VALUES = {29, 54, 55, 56, 80, 81, 82}
+BAD_CONTACT_SIGNAL_VALUES = STRONG_BAD_CONTACT_SIGNAL_VALUES | WEAK_CONTACT_SIGNAL_VALUES
+BLOCKING_SIGNAL_VALUES = STRONG_BAD_CONTACT_SIGNAL_VALUES | {NO_CONTACT_SIGNAL_VALUE}
+BASELINE_MAX_SAMPLES = 180
 
 PARSER_SYNC = 0xAA
 PARSER_EXCODE = 0x55
@@ -317,6 +325,396 @@ class EmotionAnalyzer:
         }
 
 
+class EEGAnalyzer:
+    EMOTION_NAMES_ZH = {
+        "normal": "正常",
+        "anxiety": "焦虑",
+        "stress": "紧张",
+        "fatigue": "疲劳",
+        "weakness": "虚弱",
+    }
+    STATUS_NAMES_ZH = {
+        "calibrating": "基线校准中",
+        "no_contact": "等待佩戴",
+        "poor_signal": "信号质量不佳",
+    }
+    FEATURE_NAMES = (
+        "theta_alpha",
+        "theta_beta",
+        "theta_alpha_beta",
+        "engagement",
+        "alpha_beta",
+        "slow_ratio",
+        "beta_ratio",
+        "gamma_ratio",
+    )
+
+    def __init__(self, baseline_sec=BASELINE_SEC):
+        self.baseline_sec = baseline_sec
+        self.start_time = time.time()
+        self.baseline_features = deque(maxlen=BASELINE_MAX_SAMPLES)
+        self.baseline_mean = None
+        self.baseline_std = None
+        self.smoothed_indices = None
+        self.last_emotion = "normal"
+        self.pending_emotion = "normal"
+        self.hold_counter = 0
+        self.ema_alpha = 0.32
+        self.normal_baseline_alpha = 0.03
+        self.mild_baseline_alpha = 0.008
+        self.index_history = deque(maxlen=8)
+
+    def _quality_level(self, signal_quality):
+        if signal_quality is None:
+            return "unknown"
+        if signal_quality == NO_CONTACT_SIGNAL_VALUE:
+            return "no_contact"
+        if signal_quality in STRONG_BAD_CONTACT_SIGNAL_VALUES:
+            return "bad_contact"
+        if signal_quality == 0:
+            return "good"
+        if signal_quality < 25:
+            return "fair"
+        if signal_quality < 50:
+            return "usable"
+        if signal_quality < POOR_SIGNAL_THRESHOLD:
+            return "noisy"
+        return "poor"
+
+    def _is_signal_clean(self, signal_quality):
+        return self._quality_level(signal_quality) in {"good", "fair", "usable", "noisy"}
+
+    def _extract_features(self, eeg_power):
+        eps = 1e-8
+        delta = float(eeg_power["delta"])
+        theta = float(eeg_power["theta"])
+        alpha = float(eeg_power["low_alpha"]) + float(eeg_power["high_alpha"])
+        beta = float(eeg_power["low_beta"]) + float(eeg_power["high_beta"])
+        gamma = float(eeg_power["low_gamma"]) + float(eeg_power["mid_gamma"])
+        total = delta + theta + alpha + beta + gamma + eps
+
+        values = np.array(
+            [
+                theta / (alpha + eps),
+                theta / (beta + eps),
+                (theta + alpha) / (beta + eps),
+                beta / (alpha + theta + eps),
+                alpha / (beta + eps),
+                (delta + theta) / total,
+                beta / total,
+                gamma / total,
+            ],
+            dtype=np.float64,
+        )
+        return np.nan_to_num(values, nan=0.0, posinf=100.0, neginf=0.0)
+
+    def _feature_dict(self, feats, z=None):
+        out = {name: float(value) for name, value in zip(self.FEATURE_NAMES, feats)}
+        if z is not None:
+            out["z"] = {name: float(value) for name, value in zip(self.FEATURE_NAMES, z)}
+        return out
+
+    def _empty_indices(self):
+        return {"anxiety_idx": 0.0, "stress_idx": 0.0, "fatigue_idx": 0.0, "weakness_idx": 0.0}
+
+    def _reset_current_prediction(self):
+        self.last_emotion = "normal"
+        self.pending_emotion = "normal"
+        self.hold_counter = 0
+
+    def _invalid_result(self, status, signal_quality, quality_level, attention, meditation, feats, reason_codes):
+        self._reset_current_prediction()
+        return {
+            "status": status,
+            "valid_current": False,
+            "model_type": "rule_based_eeg_state_estimation",
+            "calibration_progress": 1.0 if self.is_baseline_ready() else 0.0,
+            "signal_quality": signal_quality,
+            "quality_level": quality_level,
+            "attention": attention,
+            "meditation": meditation,
+            "emotion": "normal",
+            "emotion_zh": self.STATUS_NAMES_ZH.get(status, self.EMOTION_NAMES_ZH["normal"]),
+            "probs": {},
+            "indices": self._empty_indices(),
+            "features": self._feature_dict(feats),
+            "baseline_warning": "",
+            "reason_codes": reason_codes,
+        }
+
+    def _baseline_warning(self, feats, indices=None):
+        theta_beta = float(feats[1])
+        slow_ratio = float(feats[5])
+        if indices and (indices.get("fatigue_idx", 0) >= 62 or indices.get("weakness_idx", 0) >= 62):
+            return "initial_state_may_not_be_normal"
+        if theta_beta >= 2.8 or slow_ratio >= 0.72:
+            return "initial_state_may_not_be_normal"
+        return ""
+
+    def _build_baseline(self):
+        arr = np.array(self.baseline_features, dtype=np.float64)
+        self.baseline_mean = np.mean(arr, axis=0)
+        self.baseline_std = np.maximum(np.std(arr, axis=0), 0.04)
+        logger.info("eeg baseline ready | mean=%s", self.baseline_mean.round(3).tolist())
+
+    def _zscore(self, feats):
+        if self.baseline_mean is None:
+            return np.zeros_like(feats)
+        return np.clip((feats - self.baseline_mean) / (self.baseline_std + 1e-6), -3.5, 3.5)
+
+    def is_baseline_ready(self):
+        return self.baseline_mean is not None
+
+    def _scale_score(self, weighted_z, base=50.0, gain=13.5):
+        return float(np.clip(base + gain * weighted_z, 0.0, 100.0))
+
+    def _build_indices(self, z):
+        theta_alpha, theta_beta, theta_alpha_beta, engagement, alpha_beta, slow_ratio, beta_ratio, gamma_ratio = z
+        indices = {
+            "fatigue_idx": self._scale_score(
+                0.30 * theta_alpha
+                + 0.30 * theta_beta
+                + 0.22 * theta_alpha_beta
+                + 0.24 * slow_ratio
+                - 0.20 * engagement
+                - 0.14 * beta_ratio
+            ),
+            "stress_idx": self._scale_score(
+                0.36 * beta_ratio
+                + 0.28 * engagement
+                + 0.20 * gamma_ratio
+                - 0.18 * alpha_beta
+                - 0.08 * slow_ratio
+            ),
+            "anxiety_idx": self._scale_score(
+                0.32 * gamma_ratio
+                + 0.30 * beta_ratio
+                + 0.20 * engagement
+                + 0.14 * theta_beta
+                - 0.18 * alpha_beta
+            ),
+            "weakness_idx": self._scale_score(
+                0.36 * slow_ratio
+                + 0.24 * theta_alpha_beta
+                + 0.18 * alpha_beta
+                - 0.24 * engagement
+                - 0.20 * beta_ratio
+                - 0.12 * gamma_ratio
+            ),
+        }
+        if self.smoothed_indices is None:
+            self.smoothed_indices = indices
+        else:
+            self.smoothed_indices = {
+                key: self.ema_alpha * value + (1 - self.ema_alpha) * self.smoothed_indices[key]
+                for key, value in indices.items()
+            }
+        smoothed = {key: float(value) for key, value in self.smoothed_indices.items()}
+        self.index_history.append(smoothed)
+        return smoothed
+
+    def _trend(self, key):
+        if len(self.index_history) < 4:
+            return 0.0
+        values = [item[key] for item in self.index_history]
+        recent = float(np.mean(values[-3:]))
+        previous = float(np.mean(values[:3]))
+        return recent - previous
+
+    def _mean_index(self, key, window=5):
+        if not self.index_history:
+            return 0.0
+        values = [item[key] for item in list(self.index_history)[-window:]]
+        return float(np.mean(values))
+
+    def _infer_emotion(self, indices, z):
+        reason_codes = []
+        candidates = {
+            "fatigue": indices["fatigue_idx"],
+            "stress": indices["stress_idx"],
+            "anxiety": indices["anxiety_idx"],
+            "weakness": indices["weakness_idx"],
+        }
+        trends = {
+            "fatigue": self._trend("fatigue_idx"),
+            "stress": self._trend("stress_idx"),
+            "anxiety": self._trend("anxiety_idx"),
+            "weakness": self._trend("weakness_idx"),
+        }
+        mean_indices = {
+            "fatigue": self._mean_index("fatigue_idx"),
+            "stress": self._mean_index("stress_idx"),
+            "anxiety": self._mean_index("anxiety_idx"),
+            "weakness": self._mean_index("weakness_idx"),
+        }
+
+        if indices["fatigue_idx"] >= 59 and (z[1] > 0.22 or z[5] > 0.22 or trends["fatigue"] > 2.6 or mean_indices["fatigue"] >= 61):
+            reason_codes.append("theta_beta_supported")
+        if indices["fatigue_idx"] >= 57 and trends["fatigue"] > 3.2:
+            reason_codes.append("fatigue_trend_rise")
+        if indices["stress_idx"] >= 59 and (z[6] > 0.22 or z[3] > 0.22 or trends["stress"] > 2.6 or mean_indices["stress"] >= 61):
+            reason_codes.append("beta_engagement_supported")
+        if indices["anxiety_idx"] >= 59 and (z[7] > 0.22 or z[6] > 0.22 or trends["anxiety"] > 2.6 or mean_indices["anxiety"] >= 61):
+            reason_codes.append("beta_gamma_supported")
+        if indices["weakness_idx"] >= 59 and (z[5] > 0.22 or trends["weakness"] > 2.6 or mean_indices["weakness"] >= 61):
+            reason_codes.append("slow_wave_supported")
+
+        top_name, top_value = max(candidates.items(), key=lambda item: item[1])
+        sorted_values = sorted(candidates.values(), reverse=True)
+        margin = sorted_values[0] - sorted_values[1] if len(sorted_values) > 1 else sorted_values[0]
+        top_supported = any(
+            code.startswith(top_name) or
+            (top_name == "fatigue" and code in {"theta_beta_supported", "fatigue_trend_rise"}) or
+            (top_name == "stress" and code == "beta_engagement_supported") or
+            (top_name == "anxiety" and code == "beta_gamma_supported") or
+            (top_name == "weakness" and code == "slow_wave_supported")
+            for code in reason_codes
+        )
+
+        top_mean = mean_indices[top_name]
+
+        if top_value >= 68 and margin >= 3.5 and top_supported:
+            candidate = top_name
+        elif top_mean >= 61 and top_value >= 60 and top_supported:
+            candidate = top_name
+            reason_codes.append(f"{top_name}_mean_{top_mean:.1f}")
+        elif top_value >= 63 and trends[top_name] > 3.0 and top_supported:
+            candidate = top_name
+        elif max(candidates.values()) <= 58 and max(mean_indices.values()) <= 60:
+            candidate = "normal"
+        else:
+            candidate = self.last_emotion if self.last_emotion != "normal" and top_value >= 61 and top_mean >= 60 and top_supported else "normal"
+
+        if candidate != self.pending_emotion:
+            self.pending_emotion = candidate
+            self.hold_counter = 1
+        else:
+            self.hold_counter += 1
+
+        if candidate == "normal":
+            required_hold = 1
+        elif top_value >= 68:
+            required_hold = 2
+        else:
+            required_hold = 3
+        if self.hold_counter >= required_hold:
+            self.last_emotion = candidate
+
+        if self.last_emotion == "normal":
+            reason_codes.append("within_personal_baseline")
+        reason_codes.append(f"top_index_{top_name}_{top_value:.1f}")
+        reason_codes.append(f"top_mean_{top_name}_{top_mean:.1f}")
+        if trends[top_name] > 1.5:
+            reason_codes.append(f"{top_name}_trend_{trends[top_name]:.1f}")
+
+        return self.last_emotion, reason_codes
+
+    def _maybe_update_baseline(self, feats, emotion, indices):
+        if self.baseline_mean is None or self.baseline_std is None:
+            return
+        max_index = max(indices.values())
+        if emotion == "normal" and max_index < 60:
+            alpha = self.normal_baseline_alpha
+        elif emotion == "normal" and max_index < 62:
+            alpha = self.mild_baseline_alpha
+        else:
+            return
+        self.baseline_mean = (1 - alpha) * self.baseline_mean + alpha * feats
+        delta = feats - self.baseline_mean
+        self.baseline_std = np.maximum(
+            (1 - alpha) * self.baseline_std + alpha * np.abs(delta),
+            0.04,
+        )
+
+    def analyze(self, eeg_power, signal_quality, attention=None, meditation=None):
+        feats = self._extract_features(eeg_power)
+        quality_level = self._quality_level(signal_quality)
+        clean_signal = self._is_signal_clean(signal_quality)
+
+        if quality_level == "no_contact":
+            return self._invalid_result(
+                "no_contact",
+                signal_quality,
+                quality_level,
+                attention,
+                meditation,
+                feats,
+                ["device_online_waiting_for_contact"],
+            )
+
+        if not clean_signal:
+            reason_codes = ["poor_signal"]
+            if quality_level == "bad_contact":
+                reason_codes = ["bad_contact_signal"]
+            elif quality_level == "unknown":
+                reason_codes = ["unknown_signal_quality"]
+            return self._invalid_result(
+                "poor_signal",
+                signal_quality,
+                quality_level,
+                attention,
+                meditation,
+                feats,
+                reason_codes,
+            )
+
+        quality_reason_codes = []
+        if quality_level == "noisy":
+            quality_reason_codes.append("noisy_signal")
+        if signal_quality in WEAK_CONTACT_SIGNAL_VALUES:
+            quality_reason_codes.append("weak_contact_signal")
+
+        elapsed = time.time() - self.start_time
+        if not self.is_baseline_ready():
+            self.baseline_features.append(feats)
+            progress_by_time = elapsed / max(self.baseline_sec, 1)
+            progress_by_count = len(self.baseline_features) / max(MIN_BASELINE_SAMPLES, 1)
+            progress = min(1.0, progress_by_time, progress_by_count)
+            if elapsed >= self.baseline_sec and len(self.baseline_features) >= MIN_BASELINE_SAMPLES:
+                self._build_baseline()
+            return {
+                "status": "calibrating",
+                "valid_current": False,
+                "model_type": "rule_based_eeg_state_estimation",
+                "calibration_progress": progress,
+                "signal_quality": signal_quality,
+                "quality_level": quality_level,
+                "attention": attention,
+                "meditation": meditation,
+                "emotion": "normal",
+                "emotion_zh": self.STATUS_NAMES_ZH["calibrating"],
+                "probs": {},
+                "indices": self._empty_indices(),
+                "features": self._feature_dict(feats),
+                "baseline_warning": self._baseline_warning(feats),
+                "reason_codes": ["baseline_calibrating", *quality_reason_codes],
+            }
+
+        z = self._zscore(feats)
+        indices = self._build_indices(z)
+        emotion, reason_codes = self._infer_emotion(indices, z)
+        reason_codes = [*reason_codes, *quality_reason_codes]
+        self._maybe_update_baseline(feats, emotion, indices)
+
+        return {
+            "status": "ok",
+            "valid_current": True,
+            "model_type": "rule_based_eeg_state_estimation",
+            "calibration_progress": 1.0,
+            "signal_quality": signal_quality,
+            "quality_level": quality_level,
+            "attention": attention,
+            "meditation": meditation,
+            "emotion": emotion,
+            "emotion_zh": self.EMOTION_NAMES_ZH[emotion],
+            "probs": {},
+            "indices": indices,
+            "features": self._feature_dict(feats, z),
+            "baseline_warning": self._baseline_warning(feats, indices),
+            "reason_codes": reason_codes,
+        }
+
+
 class EEGWorker(threading.Thread):
     def __init__(self, worker_id, port, baud):
         super().__init__(daemon=True)
@@ -324,10 +722,13 @@ class EEGWorker(threading.Thread):
         self.port_str = port
         self.stop_event = threading.Event()
         self.parser = TGAMParser()
-        self.analyzer = EmotionAnalyzer(baseline_sec=BASELINE_SEC)
+        self.analyzer = EEGAnalyzer(baseline_sec=BASELINE_SEC)
         self.raw_buffer = deque(maxlen=WINDOW_SIZE)
         self.raw_since_last = []
         self.last_signal_quality = 0
+        self.last_attention = None
+        self.last_meditation = None
+        self.raw_filter_zi = None
         self.ser = None
         self.baud = baud
         self.last_debug_log_time = 0.0
@@ -365,13 +766,22 @@ class EEGWorker(threading.Thread):
                         self.total_raw_count += 1
                     elif event_type == "signal":
                         self.last_signal_quality = event["value"]
+                    elif event_type == "attention":
+                        self.last_attention = event["value"]
+                    elif event_type == "meditation":
+                        self.last_meditation = event["value"]
                     elif event_type == "eeg_power":
                         eeg_power_event = event["value"]
                         self.total_eeg_power_count += 1
                         self._debug_log_eeg_power(eeg_power_event)
 
                 if eeg_power_event is not None:
-                    result = self.analyzer.analyze(eeg_power_event, self.last_signal_quality)
+                    result = self.analyzer.analyze(
+                        eeg_power_event,
+                        self.last_signal_quality,
+                        attention=self.last_attention,
+                        meditation=self.last_meditation,
+                    )
                     result["workerId"] = self.worker_id
                     result["port"] = self.port_str
                     result["raw_powers"] = eeg_power_event
@@ -440,14 +850,31 @@ class EEGWorker(threading.Thread):
 
     def _get_raw_wave_chunk(self):
         if self.raw_since_last:
-            samples = self.raw_since_last[::DOWNSAMPLE_FACTOR]
+            samples = self._filter_raw_samples(self.raw_since_last)[::DOWNSAMPLE_FACTOR]
             self.raw_since_last.clear()
         else:
-            samples = list(self.raw_buffer)[::DOWNSAMPLE_FACTOR]
+            samples = self._filter_raw_samples(list(self.raw_buffer), update_state=False)[::DOWNSAMPLE_FACTOR]
 
         if len(samples) > 128:
             samples = samples[-128:]
-        return samples
+        return [float(round(value, 3)) for value in samples]
+
+    def _filter_raw_samples(self, samples, update_state=True):
+        if not samples:
+            return []
+        arr = np.asarray(samples, dtype=np.float64)
+        if arr.size < max(len(BP_A), len(BP_B)) * 3:
+            arr = arr - np.mean(arr)
+            return arr.tolist()
+
+        if update_state:
+            if self.raw_filter_zi is None:
+                self.raw_filter_zi = lfilter_zi(BP_B, BP_A) * arr[0]
+            filtered, self.raw_filter_zi = lfilter(BP_B, BP_A, arr, zi=self.raw_filter_zi)
+        else:
+            zi = lfilter_zi(BP_B, BP_A) * arr[0]
+            filtered, _ = lfilter(BP_B, BP_A, arr, zi=zi)
+        return filtered.tolist()
 
     def _should_log_debug(self):
         now = time.time()
@@ -642,10 +1069,19 @@ def remove_eeg_device(worker_id):
 @app.route("/eeg/stream")
 def sse_stream():
     requested_worker_id = request.args.get("workerId", default=DEFAULT_WORKER_ID, type=int)
+    requested_port = str(request.args.get("port", "")).strip()
     port_mapping = get_port_mapping()
     if not port_mapping:
         return {"status": "error", "message": "no eeg devices configured"}, 404
-    worker_id = requested_worker_id if requested_worker_id in port_mapping else next(iter(port_mapping.keys()))
+    if requested_port:
+        worker_id = next(
+            (item_worker_id for item_worker_id, item_port in port_mapping.items() if item_port == requested_port),
+            None,
+        )
+        if worker_id is None:
+            return {"status": "error", "message": f"port {requested_port} is not configured"}, 404
+    else:
+        worker_id = requested_worker_id if requested_worker_id in port_mapping else next(iter(port_mapping.keys()))
     worker = get_or_create_worker(worker_id)
     stream_id = worker.register_stream()
     subscriber_queue = worker.subscribe()
