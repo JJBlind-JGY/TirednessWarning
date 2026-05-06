@@ -49,6 +49,7 @@ DEFAULT_PORT = ""
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.environ.get("EEG_CONFIG_FILE", os.path.join(BASE_DIR, "config", "eeg-devices.json"))
 BAUDRATE = 57600
+SERIAL_SILENCE_OFFLINE_SEC = 3.0
 
 RAW_FS = 512
 TARGET_FS = 128
@@ -732,17 +733,54 @@ class EEGWorker(threading.Thread):
         self.ser = None
         self.baud = baud
         self.last_debug_log_time = 0.0
+        self.last_serial_read_at = time.monotonic()
         self.total_raw_count = 0
         self.total_eeg_power_count = 0
         self.total_sse_payload_count = 0
         self.subscribers = set()
         self.subscribers_lock = threading.Lock()
-        self.active_stream_id = None
-        self.active_stream_lock = threading.Lock()
+        self.status_lock = threading.Lock()
+        self.status = "connecting"
+        self.last_payload_at = None
+        self.last_error = ""
+        self.started_at = datetime.utcnow().isoformat() + "Z"
+
+    def _set_status(self, status, error=""):
+        with self.status_lock:
+            self.status = status
+            self.last_error = str(error or "")
+
+    def _subscriber_count(self):
+        with self.subscribers_lock:
+            return len(self.subscribers)
+
+    def status_payload(self, status=None, error=None):
+        with self.status_lock:
+            current_status = status or self.status
+            current_error = self.last_error if error is None else str(error or "")
+            last_payload_at = self.last_payload_at
+        return {
+            "workerId": self.worker_id,
+            "port": self.port_str,
+            "status": current_status,
+            "valid_current": False,
+            "raw_wave": [],
+            "raw_powers": {},
+            "indices": {},
+            "probs": {},
+            "features": {},
+            "reason_codes": [current_error] if current_error else [],
+            "message": current_error,
+            "last_payload_at": last_payload_at,
+            "subscriber_count": self._subscriber_count(),
+        }
 
     def _open_serial(self):
         if self.ser is None or not self.ser.is_open:
+            self._set_status("connecting")
             self.ser = serial.Serial(self.port_str, self.baud, timeout=0.1)
+            self.last_serial_read_at = time.monotonic()
+            self._set_status("online")
             logger.info("serial opened | worker=%s port=%s", self.worker_id, self.port_str)
 
     def run(self):
@@ -751,8 +789,11 @@ class EEGWorker(threading.Thread):
             while not self.stop_event.is_set():
                 chunk = self.ser.read(256)
                 if not chunk:
+                    if time.monotonic() - self.last_serial_read_at > SERIAL_SILENCE_OFFLINE_SEC:
+                        raise TimeoutError(f"serial silent for {SERIAL_SILENCE_OFFLINE_SEC:.1f}s")
                     continue
 
+                self.last_serial_read_at = time.monotonic()
                 self._debug_log_chunk(len(chunk))
                 events = self.parser.feed(chunk)
                 eeg_power_event = None
@@ -788,12 +829,16 @@ class EEGWorker(threading.Thread):
                     result["raw_wave"] = self._get_raw_wave_chunk()
                     result["wave_fs"] = TARGET_FS
                     result["analysis_time"] = datetime.utcnow().isoformat() + "Z"
+                    self.last_payload_at = result["analysis_time"]
+                    self._set_status("online")
                     self.total_sse_payload_count += 1
                     self._debug_log_payload(result)
                     self._publish(result)
 
                 time.sleep(0.01)
         except Exception as exc:
+            self._set_status("error", exc)
+            self._publish(self.status_payload(status="error", error=exc))
             logger.exception("worker crashed | worker=%s port=%s error=%s", self.worker_id, self.port_str, exc)
         finally:
             try:
@@ -802,29 +847,23 @@ class EEGWorker(threading.Thread):
                     logger.info("serial closed | worker=%s port=%s", self.worker_id, self.port_str)
             except Exception:
                 pass
+            if self.stop_event.is_set():
+                self._set_status("offline")
+            elif self.status != "error":
+                self._set_status("offline", "serial stream stopped")
+                self._publish(self.status_payload(status="offline", error="serial stream stopped"))
 
     def stop(self):
         self.stop_event.set()
-
-    def register_stream(self):
-        stream_id = f"{self.worker_id}-{time.time_ns()}"
-        with self.active_stream_lock:
-            self.active_stream_id = stream_id
-        return stream_id
-
-    def is_stream_active(self, stream_id):
-        with self.active_stream_lock:
-            return self.active_stream_id == stream_id
-
-    def clear_stream(self, stream_id):
-        with self.active_stream_lock:
-            if self.active_stream_id == stream_id:
-                self.active_stream_id = None
 
     def subscribe(self):
         subscriber_queue = queue.Queue(maxsize=20)
         with self.subscribers_lock:
             self.subscribers.add(subscriber_queue)
+        try:
+            subscriber_queue.put(self.status_payload(), block=False)
+        except queue.Full:
+            pass
         return subscriber_queue
 
     def unsubscribe(self, subscriber_queue):
@@ -977,6 +1016,12 @@ def stop_removed_or_changed_workers(next_mapping):
                 workers.pop(worker_id, None)
 
 
+def remove_worker_if_current(worker_id, worker):
+    with workers_lock:
+        if workers.get(worker_id) is worker:
+            workers.pop(worker_id, None)
+
+
 def get_or_create_worker(worker_id):
     port_mapping = get_port_mapping()
     if not port_mapping:
@@ -987,8 +1032,12 @@ def get_or_create_worker(worker_id):
 
     with workers_lock:
         if worker_id in workers:
-            workers.move_to_end(worker_id)
-            return workers[worker_id]
+            worker = workers[worker_id]
+            if worker.is_alive() and not worker.stop_event.is_set():
+                workers.move_to_end(worker_id)
+                return worker
+            worker.stop()
+            workers.pop(worker_id, None)
 
         if len(workers) >= MAX_WORKERS:
             _, old_worker = workers.popitem(last=False)
@@ -1013,11 +1062,15 @@ def index():
 
 @app.get("/eeg/health")
 def health():
+    port_mapping = get_port_mapping()
+    with workers_lock:
+        worker_status = {worker_id: worker.status_payload() for worker_id, worker in workers.items()}
     return {
         "status": "ok",
         "default_worker_id": DEFAULT_WORKER_ID,
         "default_port": DEFAULT_PORT,
-        "available_workers": list(get_port_mapping().keys()),
+        "available_workers": list(port_mapping.keys()),
+        "workers": worker_status,
     }
 
 
@@ -1083,7 +1136,7 @@ def sse_stream():
     else:
         worker_id = requested_worker_id if requested_worker_id in port_mapping else next(iter(port_mapping.keys()))
     worker = get_or_create_worker(worker_id)
-    stream_id = worker.register_stream()
+    stream_id = f"{worker_id}-{time.time_ns()}"
     subscriber_queue = worker.subscribe()
     sent_count = 0
     ip = request.remote_addr  # ✅ 提前保存
@@ -1094,8 +1147,9 @@ def sse_stream():
         nonlocal sent_count
         try:
             while True:
-                if not worker.is_stream_active(stream_id):
-                    logger.info("sse superseded | worker=%s old_stream=%s", worker_id, stream_id)
+                if not worker.is_alive():
+                    yield f"data: {json.dumps(worker.status_payload(status='error'), ensure_ascii=False)}\n\n"
+                    remove_worker_if_current(worker_id, worker)
                     break
 
                 try:
@@ -1115,7 +1169,6 @@ def sse_stream():
                     yield ": heartbeat\n\n"
         finally:
             worker.unsubscribe(subscriber_queue)
-            worker.clear_stream(stream_id)
             # logger.info("sse disconnected | ip=%s worker=%s stream=%s", request.remote_addr, worker_id, stream_id)
             # ✅ 用缓存的 ip
             logger.info("sse disconnected | ip=%s worker=%s stream=%s",

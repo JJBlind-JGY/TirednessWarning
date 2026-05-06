@@ -1,5 +1,4 @@
-﻿import { ElMessage } from 'element-plus'
-import * as echarts from 'echarts'
+﻿import * as echarts from 'echarts'
 
 const RAW_WAVE_LIMIT = 512
 const WAVE_SMOOTH_WINDOW = 5
@@ -13,6 +12,9 @@ const EMOTION_TEXT = {
 }
 const BAND_NAMES = ['delta', 'theta', 'alpha', 'beta', 'gamma']
 const BAND_LABELS = ['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']
+const DEFAULT_BAND_SNAPSHOT = { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }
+const DEFAULT_INDICES = { anxiety_idx: 0, stress_idx: 0, fatigue_idx: 0, weakness_idx: 0 }
+const EEG_RETRY_DELAY_MS = 2000
 
 export function createEegMonitor({ state, getBindingById, getDeviceLabel, evaluateWarning, updateFusionState }) {
   const waveChartRefs = new Map()
@@ -20,6 +22,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   const bandChartRefs = new Map()
   const bandChartInstances = new Map()
   const workerStreams = new Map()
+  const retryTimers = new Map()
 
   function getBandSnapshot(rawPowers = {}) {
     const delta = Number(rawPowers.delta || 0)
@@ -228,7 +231,62 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.eegFusionStreak = 0
   }
 
+  function resetEegState(binding, { status = 'idle', statusText = '等待脑电数据' } = {}) {
+    binding.eegRunning = false
+    binding.activeWorkerId = null
+    binding.eegStatus = status
+    binding.eegStatusText = statusText
+    binding.eegEmotion = ''
+    binding.eegEmotionZh = ''
+    binding.eegQualityLevel = ''
+    binding.signalQuality = null
+    binding.reasonCodes = []
+    binding.features = {}
+    binding.indices = { ...DEFAULT_INDICES }
+    binding.probs = {}
+    binding.calibrationProgress = 0
+    binding.analysisTime = ''
+    binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
+    binding.rawWaveBuffer = []
+    binding.waveScale = 1
+    clearCurrentEegPrediction(binding)
+    refreshWaveChart(binding)
+    refreshBandChart(binding)
+    updateFusionState?.(binding)
+    evaluateWarning(binding)
+  }
+
   function updateEegData(binding, payload) {
+    const status = payload.status || 'ok'
+    const statusText = payload.message || payload.error || ''
+    const offlineStatuses = new Set(['offline', 'error', 'reconnecting'])
+    if (offlineStatuses.has(status)) {
+      const retryWorkerId = payload.workerId ?? binding.activeWorkerId ?? binding.workerId
+      resetEegState(binding, {
+        status,
+        statusText: statusText || (status === 'error' ? '脑电连接失败，自动重连中' : '脑电离线，自动重连中')
+      })
+      if (retryWorkerId != null) scheduleWorkerRetry(retryWorkerId)
+      return
+    }
+
+    const hasRawWave = Array.isArray(payload.raw_wave) && payload.raw_wave.length > 0
+    const hasRawPowers = payload.raw_powers && Object.keys(payload.raw_powers).length > 0
+    const isStatusOnlyPayload = ['connecting', 'online'].includes(status)
+      && !payload.analysis_time
+      && !payload.emotion
+      && !hasRawWave
+      && !hasRawPowers
+
+    if (isStatusOnlyPayload) {
+      binding.eegRunning = true
+      binding.eegStatus = status
+      binding.eegStatusText = status === 'connecting' ? '脑电连接中' : '在线，等待脑电数据'
+      updateFusionState?.(binding)
+      evaluateWarning(binding)
+      return
+    }
+
     binding.eegStatus = payload.status || 'ok'
     binding.analysisTime = payload.analysis_time || new Date().toISOString()
     binding.eegEmotion = payload.emotion || 'normal'
@@ -274,6 +332,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   function resetWaveState(binding) {
     binding.rawWaveBuffer = []
     binding.waveScale = 1
+    binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
     refreshWaveChart(binding)
     refreshBandChart(binding)
   }
@@ -282,14 +341,33 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     return workerStreams.get(workerId)
   }
 
-  function setWorkerBindingsStopped(workerId) {
-    state.bindings.forEach((binding) => {
-      if (binding.activeWorkerId === workerId) {
-        binding.eegRunning = false
-        binding.activeWorkerId = null
-        if (binding.eegStatus !== 'idle') binding.eegStatusText = '已断开'
-      }
+  function clearWorkerRetry(workerId) {
+    const timer = retryTimers.get(workerId)
+    if (!timer) return
+    window.clearTimeout(timer)
+    retryTimers.delete(workerId)
+  }
+
+  function scheduleWorkerRetry(workerId) {
+    if (retryTimers.has(workerId)) return
+    const timer = window.setTimeout(() => {
+      retryTimers.delete(workerId)
+      ensureWorkerMonitor(workerId)
+    }, EEG_RETRY_DELAY_MS)
+    retryTimers.set(workerId, timer)
+  }
+
+  function resetStreamBindings(streamState, statusText, { retry = true } = {}) {
+    let shouldRetry = false
+    const bindingIds = Array.from(streamState.bindingIds)
+    bindingIds.forEach((bindingId) => {
+      const binding = getBindingById(bindingId)
+      if (!binding || binding.activeWorkerId !== streamState.workerId) return
+      resetEegState(binding, { status: 'error', statusText })
+      if (retry) shouldRetry = true
     })
+    streamState.bindingIds.clear()
+    if (shouldRetry) scheduleWorkerRetry(streamState.workerId)
   }
 
   async function openWorkerStream(workerId) {
@@ -306,7 +384,10 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
       let buffer = ''
       while (true) {
         const { done, value } = await reader.read()
-        if (done) break
+        if (done) {
+          resetStreamBindings(streamState, '脑电连接已断开')
+          break
+        }
         buffer += decoder.decode(value, { stream: true })
         while (buffer.includes('\n\n')) {
           const splitIndex = buffer.indexOf('\n\n')
@@ -324,21 +405,10 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
       }
     } catch (error) {
       if (error.name !== 'AbortError') {
-        streamState.bindingIds.forEach((bindingId) => {
-          const binding = getBindingById(bindingId)
-          if (!binding) return
-          binding.eegRunning = false
-          binding.activeWorkerId = null
-          binding.eegStatus = 'error'
-          clearCurrentEegPrediction(binding)
-          updateFusionState?.(binding)
-          binding.eegStatusText = '连接失败'
-        })
-        ElMessage.error(`${getDeviceLabel(workerId)} 脑电连接失败`)
+        resetStreamBindings(streamState, '脑电连接失败')
       }
     } finally {
       if (workerStreams.get(workerId) === streamState) workerStreams.delete(workerId)
-      setWorkerBindingsStopped(workerId)
     }
   }
 
@@ -350,6 +420,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     }
     binding.activeWorkerId = binding.workerId
     binding.eegRunning = true
+    clearWorkerRetry(binding.workerId)
     streamState?.bindingIds.add(binding.id)
     if (streamState?.lastPayload) updateEegData(binding, streamState.lastPayload)
   }
@@ -366,42 +437,46 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     }
   }
 
-  function startEeg(binding) {
-    if (!binding.personId) {
-      ElMessage.warning('请先选择人员')
+  function ensureWorkerMonitor(workerId) {
+    if (workerId == null) return
+    const bindings = state.bindings.filter((binding) => binding.workerId === workerId && binding.personId)
+    if (!bindings.length) return
+
+    const existingStream = getWorkerStream(workerId)
+    if (existingStream) {
+      clearWorkerRetry(workerId)
+      bindings.forEach((binding) => {
+        binding.activeWorkerId = workerId
+        binding.eegRunning = true
+        existingStream.bindingIds.add(binding.id)
+        if (existingStream.lastPayload) updateEegData(binding, existingStream.lastPayload)
+      })
       return
     }
-    if (binding.workerId == null) {
-      ElMessage.warning('请先选择脑电设备')
-      return
-    }
-    if (binding.eegRunning && binding.activeWorkerId === binding.workerId) {
-      binding.eegStatus = 'ok'
-      binding.eegStatusText = '在线'
+
+    bindings.forEach((binding) => {
+      binding.eegStatus = 'connecting'
+      binding.eegStatusText = '连接中'
+      binding.activeWorkerId = workerId
+      binding.eegRunning = true
       refreshWaveChart(binding)
       refreshBandChart(binding)
-      return
-    }
-    stopEeg(binding.id)
-    binding.eegStatus = 'connecting'
-    binding.eegStatusText = '连接中'
-    if (!binding.rawWaveBuffer.length) resetWaveState(binding)
-    else {
-      refreshWaveChart(binding)
-      refreshBandChart(binding)
-    }
-    subscribeBindingToWorker(binding)
+    })
+    subscribeBindingToWorker(bindings[0])
+    const streamState = getWorkerStream(workerId)
+    bindings.slice(1).forEach((binding) => {
+      binding.activeWorkerId = workerId
+      binding.eegRunning = true
+      streamState?.bindingIds.add(binding.id)
+      if (streamState?.lastPayload) updateEegData(binding, streamState.lastPayload)
+    })
   }
 
-  function stopEeg(bindingId) {
+  function stopEeg(bindingId, reason = 'manual') {
     const binding = getBindingById(bindingId)
     if (!binding) return
     unsubscribeBindingFromWorker(binding)
-    binding.eegRunning = false
-    clearCurrentEegPrediction(binding)
-    updateFusionState?.(binding)
-    evaluateWarning(binding)
-    if (binding.eegStatus !== 'idle') binding.eegStatusText = '已断开'
+    resetEegState(binding, { status: 'idle', statusText: '等待脑电数据' })
   }
 
   function ensureCharts(bindings) {
@@ -409,6 +484,20 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
       ensureWaveChart(binding)
       ensureBandChart(binding)
     })
+  }
+
+  function canAutoStart(binding) {
+    return Boolean(binding?.personId && binding.workerId != null)
+  }
+
+  function ensureAutoEeg(binding) {
+    if (!canAutoStart(binding)) return
+    ensureWorkerMonitor(binding.workerId)
+  }
+
+  function ensureAllAutoEeg() {
+    const workerIds = new Set(state.bindings.filter(canAutoStart).map((binding) => binding.workerId))
+    workerIds.forEach((workerId) => ensureWorkerMonitor(workerId))
   }
 
   function resizeCharts() {
@@ -419,8 +508,9 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   return {
     setChartRef: setWaveChartRef,
     setBandChartRef,
-    startEeg,
     stopEeg,
+    ensureAutoEeg,
+    ensureAllAutoEeg,
     disposeChart,
     ensureCharts,
     resizeCharts

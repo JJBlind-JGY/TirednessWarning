@@ -3,6 +3,13 @@ import * as Stomp from 'stompjs'
 
 const FACE_FATIGUE_WS_URL = '/wss'
 const FACE_FRAME_MIN_INTERVAL = 120
+const FACE_STATUS_TEXT = {
+  online: '摄像头在线，等待识别',
+  reconnecting: '摄像头自动重连中',
+  offline: '摄像头离线',
+  no_frame: '摄像头无画面',
+  model_offline: '面部模型离线'
+}
 
 function guessImageMime(base64) {
   if (base64.startsWith('/9j/')) return 'image/jpeg'
@@ -45,6 +52,7 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
   function getBindingTopic(binding) { return String(binding?.faceChannelId || '').trim() }
   function getTopicBindings(topic) { return state.bindings.filter((binding) => getBindingTopic(binding) === topic) }
   function setBindingState(binding, { connected, statusText }) { if (binding) { binding.faceConnected = connected; binding.faceStatusText = statusText } }
+  function isCameraStatus(status) { return Object.prototype.hasOwnProperty.call(FACE_STATUS_TEXT, status) }
   function clearCurrentFacePrediction(binding) {
     if (!binding) return
     binding.lastValidFaceEmotion = ''
@@ -53,6 +61,24 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
     binding.lastValidFaceScore = 0
     binding.faceAssistStreak = 0
     binding.faceStopRequired = false
+  }
+  function applyCameraStatus(binding, payload) {
+    const status = payload.status || 'offline'
+    binding.faceStatus = status
+    binding.faceStatusText = FACE_STATUS_TEXT[status] || '摄像头状态未知'
+    binding.faceConnected = status === 'online'
+    if (status !== 'online') {
+      binding.faceImageUrl = ''
+      binding.faceEmotionKey = ''
+      binding.faceEmotion = '未识别'
+      binding.faceScore = '--'
+      binding.faceRate = '--'
+      binding.faceRank = null
+      binding.faceBox = null
+    }
+    clearCurrentFacePrediction(binding)
+    updateFusionState?.(binding)
+    evaluateWarning(binding)
   }
   function markBindingsWaiting(statusText) {
     state.bindings.forEach((binding) => {
@@ -82,8 +108,12 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
   }
 
   function applyPayloadToBinding(binding, payload) {
-    binding.faceConnected = true
     binding.faceStatus = payload.status || 'ok'
+    if (isCameraStatus(binding.faceStatus)) {
+      applyCameraStatus(binding, payload)
+      return
+    }
+    binding.faceConnected = true
     binding.faceImageUrl = normalizeFaceImage(payload.image ?? payload.image_b64 ?? payload.imageBase64 ?? payload.base64Image)
 
     if (binding.faceStatus !== 'ok' || !payload.emotion5) {

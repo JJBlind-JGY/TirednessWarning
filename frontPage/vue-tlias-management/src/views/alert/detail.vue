@@ -24,8 +24,6 @@ const {
   getFaceStatusLabel,
   formatShortTime,
   setChartRef,
-  startEeg,
-  stopEeg,
   getWarningText,
   getAlertType
 } = useMonitorCenter()
@@ -114,8 +112,6 @@ function adviceText(bindingValue) { if (!bindingValue?.lastValidEegAt && !bindin
           <h3>脑电波形与波段</h3>
           <div class="eeg-actions">
             <el-tag :type="binding.eegRunning ? 'success' : 'info'">{{ getEegStatusLabel(binding) }}</el-tag>
-            <el-button type="primary" plain @click="startEeg(binding)">接入脑电</el-button>
-            <el-button @click="stopEeg(binding.id)">断开</el-button>
           </div>
         </div>
         <div class="signal-strip">
@@ -124,7 +120,7 @@ function adviceText(bindingValue) { if (!bindingValue?.lastValidEegAt && !bindin
         </div>
         <div class="chart-wrap">
           <div :ref="setChartRef(binding.id)" class="eeg-chart"></div>
-          <div v-if="!binding.rawWaveBuffer.length" class="chart-empty">点击“接入脑电”后显示实时波形</div>
+          <div v-if="!binding.rawWaveBuffer.length" class="chart-empty">自动检测脑电设备状态</div>
         </div>
         <div class="band-grid">
           <div class="metric-box"><span>Theta 占比</span><strong>{{ formatBand(binding.bandSnapshot.theta) }}</strong></div>

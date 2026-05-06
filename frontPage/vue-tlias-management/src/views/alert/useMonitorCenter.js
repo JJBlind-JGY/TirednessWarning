@@ -156,7 +156,7 @@ function normalizeBinding(item, index = 0) {
     workerId: item.workerId ?? binding.workerId, activeWorkerId: null, faceChannelId: item.faceChannelId || getDefaultCameraId(),
     eegRunning: false, eegStatus: 'idle', eegStatusText: '待接入', faceConnected: false, faceStatusText: '待接入', faceSubscription: null
   })
-  updateBindingPerson(binding)
+  updateBindingPerson(binding, { auto: false })
   return binding
 }
 
@@ -169,7 +169,7 @@ function hasFreshFace(binding, now = Date.now()) { return Boolean(binding?.lastV
 function hasPrediction(binding) { return Boolean(binding && (hasFreshEeg(binding) || hasFreshFace(binding))) }
 function getDisplayEmotion(binding) { return hasPrediction(binding) ? binding.emotionZh : '等待数据' }
 function hasCamera(binding) { return Boolean(binding?.faceChannelId && CAMERA_OPTIONS.some((item) => item.id === binding.faceChannelId)) }
-function hasEegSignal(binding) { return Boolean(binding?.eegRunning || binding?.rawWaveBuffer?.length || binding?.analysisTime) }
+function hasEegSignal(binding) { return Boolean(binding?.eegRunning || (binding?.eegStatus && binding.eegStatus !== 'idle' && binding.eegStatus !== 'error' && (binding?.rawWaveBuffer?.length || binding?.analysisTime))) }
 function hasFaceSignal(binding) { return Boolean(binding?.faceConnected || binding?.faceImageUrl || hasFreshFace(binding)) }
 function hasAnySignal(binding) { return Boolean(hasPrediction(binding) || hasEegSignal(binding) || hasFaceSignal(binding)) }
 function getCurrentStatusText(binding) {
@@ -182,16 +182,24 @@ function getCurrentStatusText(binding) {
   if (hasFaceSignal(binding)) return binding.faceStatusText || '面部检测中'
   return '等待数据'
 }
-function hasAccess(binding) { return Boolean(binding?.eegRunning || hasCamera(binding)) }
-function getAccessText(binding) { return hasAccess(binding) ? '已接入' : '待接入' }
-function getEegStatusLabel(binding) { if (!binding?.eegRunning) return '待接入'; return binding.eegStatus === 'calibrating' ? '校准中' : '检测中' }
+function hasAccess(binding) { return Boolean(binding?.eegRunning || binding?.faceConnected) }
+function getAccessText(binding) { return hasAccess(binding) ? '已接入' : '自动接入中' }
+function getEegStatusLabel(binding) {
+  if (!binding?.workerId) return '未选择脑电设备'
+  if (!binding?.eegRunning) return binding?.eegStatusText || '自动接入中'
+  if (['connecting', 'online', 'offline', 'error'].includes(binding.eegStatus)) return binding.eegStatusText || '自动接入中'
+  return binding.eegStatus === 'calibrating' ? '校准中' : (binding.eegStatusText || '检测中')
+}
 function getFaceStatusLabel(binding) { if (!hasCamera(binding)) return '未选择摄像头'; return binding.faceStatusText || '等待识别' }
 
-function updateBindingPerson(binding) {
+function updateBindingPerson(binding, { auto = true } = {}) {
   const selected = state.personnelOptions.find((item) => item.id === binding.personId || item.uid === binding.personId)
   binding.personName = selected?.name || ''
   binding.personType = selected?.type || ''
   persistBindings()
+  if (!auto) return
+  if (!binding.personId) eegMonitor.stopEeg(binding.id, 'restart')
+  else eegMonitor.ensureAutoEeg(binding)
 }
 
 function getWarningLevel(binding) { return binding.emotion === 'normal' ? 'info' : 'warning' }
@@ -364,19 +372,19 @@ const faceMonitor = createFaceMonitor({ state, getBindingById, updateBindingPers
 
 function syncBindingsWithDevices() {
   const fallbackWorkerId = DEVICE_OPTIONS[0]?.value ?? null
-  state.bindings.forEach((binding) => { if (!DEVICE_OPTIONS.some((item) => item.value === binding.workerId)) { eegMonitor.stopEeg(binding.id); binding.workerId = fallbackWorkerId; binding.activeWorkerId = null } })
+  state.bindings.forEach((binding) => { if (!DEVICE_OPTIONS.some((item) => item.value === binding.workerId)) { eegMonitor.stopEeg(binding.id, 'restart'); binding.workerId = fallbackWorkerId; binding.activeWorkerId = null; eegMonitor.ensureAutoEeg(binding) } })
   persistBindings()
 }
-function syncBindingsWithPersonnel() { state.bindings.forEach((binding) => { if (!state.personnelOptions.some((item) => item.id === binding.personId || item.uid === binding.personId)) { binding.personId = ''; binding.personName = ''; binding.personType = ''; return } updateBindingPerson(binding) }); persistBindings() }
+function syncBindingsWithPersonnel() { state.bindings.forEach((binding) => { if (!state.personnelOptions.some((item) => item.id === binding.personId || item.uid === binding.personId)) { eegMonitor.stopEeg(binding.id, 'restart'); binding.personId = ''; binding.personName = ''; binding.personType = ''; return } updateBindingPerson(binding) }); persistBindings() }
 function syncBindingsWithCameras() { const fallbackCameraId = getDefaultCameraId(); state.bindings.forEach((binding) => { if (!CAMERA_OPTIONS.some((item) => item.id === binding.faceChannelId)) { faceMonitor.unsubscribeFace(binding.id); binding.faceChannelId = fallbackCameraId; faceMonitor.subscribeFace(binding) } }); persistBindings() }
 
 async function initMonitorCenter() {
   if (state.initialized) return
   await Promise.all([loadPersonnel(), loadDevices(), loadCameras()])
-  loadBindings(); syncBindingsWithDevices(); syncBindingsWithCameras(); faceMonitor.ensureFaceConnection(); state.bindings.forEach((binding) => faceMonitor.subscribeFace(binding)); state.initialized = true
+  loadBindings(); syncBindingsWithDevices(); syncBindingsWithCameras(); faceMonitor.ensureFaceConnection(); state.bindings.forEach((binding) => faceMonitor.subscribeFace(binding)); eegMonitor.ensureAllAutoEeg(); state.initialized = true
 }
 
-function addBinding() { if (state.bindings.length >= 4) { ElMessage.warning('最多同时监测 4 张卡片'); return } const binding = createBinding(state.bindings.length + 1); state.bindings.push(binding); persistBindings(); faceMonitor.subscribeFace(binding) }
+function addBinding() { if (state.bindings.length >= 4) { ElMessage.warning('最多同时监测 4 张卡片'); return } const binding = createBinding(state.bindings.length + 1); state.bindings.push(binding); persistBindings(); faceMonitor.subscribeFace(binding); eegMonitor.ensureAutoEeg(binding) }
 function removeBinding(bindingId) { eegMonitor.stopEeg(bindingId); faceMonitor.unsubscribeFace(bindingId); eegMonitor.disposeChart(bindingId); const index = state.bindings.findIndex((item) => item.id === bindingId); if (index === -1) return; const binding = state.bindings[index]; if (binding.localVideoUrl) URL.revokeObjectURL(binding.localVideoUrl); state.bindings.splice(index, 1); persistBindings() }
 
 async function syncRemotePersonnel(personnel) { const response = await fetch(`${FACE_SERVICE_BASE}/personnel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: personnel.id, uid: personnel.uid, name: personnel.name, type: personnel.type }) }); if (!response.ok) throw new Error(`personnel save failed: ${response.status}`) }
@@ -389,7 +397,7 @@ function getNextDeviceValue() { return DEVICE_OPTIONS.reduce((max, item) => Math
 async function syncRemoteDevice(device) { if (!device.port) return; const response = await fetch('/eeg/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workerId: device.value, value: device.value, name: device.name, port: device.port }) }); if (!response.ok) throw new Error(`eeg device save failed: ${response.status}`) }
 async function removeRemoteDevice(deviceValue) { const response = await fetch(`/eeg/devices/${encodeURIComponent(deviceValue)}`, { method: 'DELETE' }); if (!response.ok && response.status !== 404) throw new Error(`eeg device delete failed: ${response.status}`) }
 async function addDevice(record) { const normalized = normalizeDevice({ value: getNextDeviceValue(), name: record.name, port: record.port }, DEVICE_OPTIONS.length); await syncRemoteDevice(normalized); DEVICE_OPTIONS.push(normalized); persistDevices(); state.bindings.forEach((binding) => { if (binding.workerId == null) binding.workerId = normalized.value }) }
-async function updateDevice(record) { const index = DEVICE_OPTIONS.findIndex((item) => item.value === Number(record.value)); if (index === -1) return; const normalized = normalizeDevice(record, index); await syncRemoteDevice(normalized); DEVICE_OPTIONS[index] = normalized; persistDevices(); persistBindings() }
+async function updateDevice(record) { const index = DEVICE_OPTIONS.findIndex((item) => item.value === Number(record.value)); if (index === -1) return; const normalized = normalizeDevice(record, index); await syncRemoteDevice(normalized); DEVICE_OPTIONS[index] = normalized; persistDevices(); state.bindings.forEach((binding) => { if (binding.workerId === normalized.value) { eegMonitor.stopEeg(binding.id, 'restart'); eegMonitor.ensureAutoEeg(binding) } }); persistBindings() }
 async function removeDevice(deviceValue) { const index = DEVICE_OPTIONS.findIndex((item) => item.value === Number(deviceValue)); if (index === -1) return; await removeRemoteDevice(deviceValue); DEVICE_OPTIONS.splice(index, 1); persistDevices(); syncBindingsWithDevices() }
 
 async function syncRemoteCamera(camera) { if (!camera.rtspUrl) return; const response = await fetch(`${FACE_SERVICE_BASE}/cameras`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: camera.id, name: camera.name, rtspUrl: camera.rtspUrl, streamName: camera.streamName }) }); if (!response.ok) throw new Error(`camera save failed: ${response.status}`) }
@@ -402,7 +410,7 @@ function formatShortTime(value) { const date = value ? new Date(value) : new Dat
 function getAlertType(binding) { if (!hasPrediction(binding)) return 'info'; if (binding.emotion === 'normal') return 'success'; if (binding.emotion === 'fatigue' || binding.emotion === 'weakness') return 'error'; return 'warning' }
 function formatIndex(value) { return Number(value || 0).toFixed(1) }
 function refreshFaceSubscription(bindingId) { faceMonitor.refreshFaceSubscription(bindingId) }
-function updateBindingDevice(binding) { if (!binding) return; const shouldRestart = binding.eegRunning; if (shouldRestart) { eegMonitor.stopEeg(binding.id); eegMonitor.startEeg(binding) } persistBindings() }
+function updateBindingDevice(binding) { if (!binding) return; eegMonitor.stopEeg(binding.id, 'restart'); persistBindings(); eegMonitor.ensureAutoEeg(binding) }
 function updateBindingCamera(binding) { if (!binding) return; faceMonitor.refreshFaceSubscription(binding.id); persistBindings() }
 function useMonitorCenterPage() {
   onMounted(async () => {
@@ -418,5 +426,5 @@ function useMonitorCenterPage() {
 const overview = computed(() => ({ total: state.bindings.length, onlineCount: state.bindings.filter(hasAccess).length, warningCount: state.bindings.filter((item) => hasPrediction(item) && getWarningLevel(item) === 'warning').length, dangerCount: state.bindings.filter((item) => hasPrediction(item) && item.emotion !== 'normal').length }))
 
 export function useMonitorCenter() {
-  return { state, DEVICE_OPTIONS, CAMERA_OPTIONS, overview, initMonitorCenter, useMonitorCenterPage, addBinding, removeBinding, addPersonnel, updatePersonnel, removePersonnel, addDevice, updateDevice, removeDevice, addCamera, updateCamera, removeCamera, updateBindingPerson, updateBindingDevice, updateBindingCamera, persistBindings, getBindingById, getDeviceLabel, getCameraLabel, getDisplayEmotion: getDisplayEmotionText, getAccessText, getEegStatusLabel, getFaceStatusLabel, formatShortTime, setChartRef: eegMonitor.setChartRef, setBandChartRef: eegMonitor.setBandChartRef, startEeg: eegMonitor.startEeg, stopEeg: eegMonitor.stopEeg, refreshFaceSubscription, getWarningLevel, getWarningText: getWarningTextDisplay, getAlertType, formatIndex }
+  return { state, DEVICE_OPTIONS, CAMERA_OPTIONS, overview, initMonitorCenter, useMonitorCenterPage, addBinding, removeBinding, addPersonnel, updatePersonnel, removePersonnel, addDevice, updateDevice, removeDevice, addCamera, updateCamera, removeCamera, updateBindingPerson, updateBindingDevice, updateBindingCamera, persistBindings, getBindingById, getDeviceLabel, getCameraLabel, getDisplayEmotion: getDisplayEmotionText, getAccessText, getEegStatusLabel, getFaceStatusLabel, formatShortTime, setChartRef: eegMonitor.setChartRef, setBandChartRef: eegMonitor.setBandChartRef, refreshFaceSubscription, getWarningLevel, getWarningText: getWarningTextDisplay, getAlertType, formatIndex }
 }

@@ -17,8 +17,6 @@ const {
   formatShortTime,
   setChartRef,
   setBandChartRef,
-  startEeg,
-  stopEeg,
   getWarningText,
   getAlertType
 } = useMonitorCenter()
@@ -59,9 +57,7 @@ function openBinding(bindingId) {
   
       </div>
       <div class="hero-actions">
-        <el-tag :type="getAlertType(binding)" effect="dark">{{ getWarningText(binding) }}</el-tag>
-        <el-button type="primary" plain @click="startEeg(binding)">接入脑电</el-button>
-        <el-button @click="stopEeg(binding.id)">断开</el-button>
+        <el-tag :type="getAlertType(binding)" effect="dark">{{ getWarningText(binding) }}</el-tag>
         <el-button @click="router.push(`/alert/device/${binding.id}`)">返回详情</el-button>
       </div>
     </section>
@@ -136,7 +132,7 @@ function openBinding(bindingId) {
         </div>
         <div class="chart-wrap wave-wrap">
           <div :ref="setChartRef(binding.id)" class="eeg-chart"></div>
-          <div v-if="!binding.rawWaveBuffer.length" class="chart-empty">接入脑电后显示实时波形</div>
+          <div v-if="!binding.rawWaveBuffer.length" class="chart-empty">自动检测脑电设备状态</div>
         </div>
       </article>
 

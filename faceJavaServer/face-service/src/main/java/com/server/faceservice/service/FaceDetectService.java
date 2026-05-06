@@ -5,11 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.server.faceservice.utils.ModelWebsocket;
 import com.server.faceservice.utils.SafeWebSocketSender;
 import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Value;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.Java2DFrameConverter;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
@@ -29,6 +31,12 @@ public class FaceDetectService {
 
     @Autowired
     ModelWebsocket modelWebsocket;
+
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
+
+    @Value("${websocket.webUser.url:/topic/face_fatigue/}")
+    private String faceFatigueUrl;
 
     private SafeWebSocketSender sender;
     private final ThreadPoolExecutor frameProcessingExecutor = new ThreadPoolExecutor(
@@ -61,6 +69,15 @@ public class FaceDetectService {
         }
     }
 
+    private void publishCameraStatus(String userId, String status, String message) {
+        messagingTemplate.convertAndSend(faceFatigueUrl + userId, Map.of(
+                "userId", userId,
+                "status", status,
+                "message", message == null ? "" : message,
+                "timestamp", System.currentTimeMillis()
+        ));
+    }
+
     public void processVideo(String rtspUrl, String userId) throws Exception {
         try (FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(rtspUrl)) {
             grabber.setOption("rtsp_transport", "tcp");
@@ -75,8 +92,10 @@ public class FaceDetectService {
 
             grabber.start();
             if (grabber.grabImage() == null) {
+                publishCameraStatus(userId, "no_frame", "摄像头未读取到首帧");
                 throw new Exception("Failed to grab the first frame from the video stream.");
             }
+            publishCameraStatus(userId, "online", "摄像头视频流在线");
 
             Frame frame;
             int skipped = 0;
@@ -100,7 +119,9 @@ public class FaceDetectService {
                     }
                 });
             }
+            publishCameraStatus(userId, "offline", "摄像头视频流已结束");
         } catch (FFmpegFrameGrabber.Exception e) {
+            publishCameraStatus(userId, "offline", e.getMessage());
             System.err.println("RTSP Stream Error: " + e.getMessage());
             throw e;
         }
