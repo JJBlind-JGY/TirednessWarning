@@ -59,6 +59,7 @@ DOWNSAMPLE_FACTOR = RAW_FS // TARGET_FS
 BP_B, BP_A = butter(4, [1 / (RAW_FS / 2), 40 / (RAW_FS / 2)], btype="band")
 BASELINE_SEC = 30
 MIN_BASELINE_SAMPLES = 10
+NO_CONTACT_BASELINE_RESET_SEC = 30.0
 NO_CONTACT_SIGNAL_VALUE = 200
 POOR_SIGNAL_THRESHOLD = 100
 STRONG_BAD_CONTACT_SIGNAL_VALUES = {107}
@@ -350,7 +351,7 @@ class EEGAnalyzer:
         "gamma_ratio",
     )
 
-    def __init__(self, baseline_sec=BASELINE_SEC):
+    def __init__(self, baseline_sec=BASELINE_SEC, baseline_reset_reason="worker_created"):
         self.baseline_sec = baseline_sec
         self.start_time = time.time()
         self.baseline_features = deque(maxlen=BASELINE_MAX_SAMPLES)
@@ -364,6 +365,9 @@ class EEGAnalyzer:
         self.normal_baseline_alpha = 0.03
         self.mild_baseline_alpha = 0.008
         self.index_history = deque(maxlen=8)
+        self.no_contact_started_at = None
+        self.baseline_reset_reason = baseline_reset_reason
+        self.baseline_reset_at = datetime.utcnow().isoformat() + "Z"
 
     def _quality_level(self, signal_quality):
         if signal_quality is None:
@@ -423,6 +427,36 @@ class EEGAnalyzer:
         self.pending_emotion = "normal"
         self.hold_counter = 0
 
+    def reset_baseline(self, reason):
+        self.start_time = time.time()
+        self.baseline_features.clear()
+        self.baseline_mean = None
+        self.baseline_std = None
+        self.smoothed_indices = None
+        self.index_history.clear()
+        self._reset_current_prediction()
+        self.baseline_reset_reason = reason
+        self.baseline_reset_at = datetime.utcnow().isoformat() + "Z"
+        logger.info("eeg baseline reset | reason=%s", reason)
+
+    def _has_baseline_state(self):
+        return self.baseline_mean is not None or bool(self.baseline_features)
+
+    def _mark_contact_state(self, quality_level):
+        now = time.time()
+        if quality_level == "no_contact":
+            if self.no_contact_started_at is None:
+                self.no_contact_started_at = now
+            no_contact_elapsed = now - self.no_contact_started_at
+            if no_contact_elapsed >= NO_CONTACT_BASELINE_RESET_SEC and self._has_baseline_state():
+                self.reset_baseline("no_contact_timeout")
+            return no_contact_elapsed
+        if self.no_contact_started_at is not None and not self.is_baseline_ready():
+            self.start_time = now
+            self.baseline_features.clear()
+        self.no_contact_started_at = None
+        return 0.0
+
     def _invalid_result(self, status, signal_quality, quality_level, attention, meditation, feats, reason_codes):
         self._reset_current_prediction()
         return {
@@ -441,6 +475,8 @@ class EEGAnalyzer:
             "features": self._feature_dict(feats),
             "baseline_warning": "",
             "reason_codes": reason_codes,
+            "baseline_reset_reason": self.baseline_reset_reason,
+            "baseline_reset_at": self.baseline_reset_at,
         }
 
     def _baseline_warning(self, feats, indices=None):
@@ -456,6 +492,7 @@ class EEGAnalyzer:
         arr = np.array(self.baseline_features, dtype=np.float64)
         self.baseline_mean = np.mean(arr, axis=0)
         self.baseline_std = np.maximum(np.std(arr, axis=0), 0.04)
+        self.baseline_reset_reason = ""
         logger.info("eeg baseline ready | mean=%s", self.baseline_mean.round(3).tolist())
 
     def _zscore(self, feats):
@@ -631,6 +668,7 @@ class EEGAnalyzer:
         feats = self._extract_features(eeg_power)
         quality_level = self._quality_level(signal_quality)
         clean_signal = self._is_signal_clean(signal_quality)
+        no_contact_elapsed = self._mark_contact_state(quality_level)
 
         if quality_level == "no_contact":
             return self._invalid_result(
@@ -640,7 +678,10 @@ class EEGAnalyzer:
                 attention,
                 meditation,
                 feats,
-                ["device_online_waiting_for_contact"],
+                [
+                    "device_online_waiting_for_contact",
+                    f"no_contact_elapsed_{no_contact_elapsed:.1f}s",
+                ],
             )
 
         if not clean_signal:
@@ -689,6 +730,8 @@ class EEGAnalyzer:
                 "features": self._feature_dict(feats),
                 "baseline_warning": self._baseline_warning(feats),
                 "reason_codes": ["baseline_calibrating", *quality_reason_codes],
+                "baseline_reset_reason": self.baseline_reset_reason,
+                "baseline_reset_at": self.baseline_reset_at,
             }
 
         z = self._zscore(feats)
@@ -713,17 +756,19 @@ class EEGAnalyzer:
             "features": self._feature_dict(feats, z),
             "baseline_warning": self._baseline_warning(feats, indices),
             "reason_codes": reason_codes,
+            "baseline_reset_reason": self.baseline_reset_reason,
+            "baseline_reset_at": self.baseline_reset_at,
         }
 
 
 class EEGWorker(threading.Thread):
-    def __init__(self, worker_id, port, baud):
+    def __init__(self, worker_id, port, baud, baseline_reset_reason="worker_created"):
         super().__init__(daemon=True)
         self.worker_id = worker_id
         self.port_str = port
         self.stop_event = threading.Event()
         self.parser = TGAMParser()
-        self.analyzer = EEGAnalyzer(baseline_sec=BASELINE_SEC)
+        self.analyzer = EEGAnalyzer(baseline_sec=BASELINE_SEC, baseline_reset_reason=baseline_reset_reason)
         self.raw_buffer = deque(maxlen=WINDOW_SIZE)
         self.raw_since_last = []
         self.last_signal_quality = 0
@@ -773,6 +818,9 @@ class EEGWorker(threading.Thread):
             "message": current_error,
             "last_payload_at": last_payload_at,
             "subscriber_count": self._subscriber_count(),
+            "baseline_reset_reason": self.analyzer.baseline_reset_reason,
+            "baseline_reset_at": self.analyzer.baseline_reset_at,
+            "baseline_ready": self.analyzer.is_baseline_ready(),
         }
 
     def _open_serial(self):
@@ -1031,6 +1079,7 @@ def get_or_create_worker(worker_id):
         raise ValueError(f"worker {worker_id} is not configured")
 
     with workers_lock:
+        baseline_reset_reason = "worker_created"
         if worker_id in workers:
             worker = workers[worker_id]
             if worker.is_alive() and not worker.stop_event.is_set():
@@ -1038,12 +1087,13 @@ def get_or_create_worker(worker_id):
                 return worker
             worker.stop()
             workers.pop(worker_id, None)
+            baseline_reset_reason = "device_reconnected"
 
         if len(workers) >= MAX_WORKERS:
             _, old_worker = workers.popitem(last=False)
             old_worker.stop()
 
-        worker = EEGWorker(worker_id, port, BAUDRATE)
+        worker = EEGWorker(worker_id, port, BAUDRATE, baseline_reset_reason=baseline_reset_reason)
         workers[worker_id] = worker
         worker.start()
         return worker

@@ -245,6 +245,8 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.indices = { ...DEFAULT_INDICES }
     binding.probs = {}
     binding.calibrationProgress = 0
+    binding.baselineResetReason = ''
+    binding.baselineResetAt = ''
     binding.analysisTime = ''
     binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
     binding.rawWaveBuffer = []
@@ -281,6 +283,8 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     if (isStatusOnlyPayload) {
       binding.eegRunning = true
       binding.eegStatus = status
+      binding.baselineResetReason = payload.baseline_reset_reason || ''
+      binding.baselineResetAt = payload.baseline_reset_at || ''
       binding.eegStatusText = status === 'connecting' ? '脑电连接中' : '在线，等待脑电数据'
       updateFusionState?.(binding)
       evaluateWarning(binding)
@@ -303,6 +307,8 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     }
     binding.probs = payload.probs || {}
     binding.calibrationProgress = Number(payload.calibration_progress || 0)
+    binding.baselineResetReason = payload.baseline_reset_reason || ''
+    binding.baselineResetAt = payload.baseline_reset_at || ''
     binding.bandSnapshot = getBandSnapshot(payload.raw_powers)
     appendRawWave(binding, payload.raw_wave)
 
@@ -314,6 +320,9 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     }
 
     if (payload.status === 'no_contact' || payload.quality_level === 'no_contact') {
+      binding.rawWaveBuffer = []
+      binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
+      binding.waveScale = 1
       binding.eegStatusText = '设备在线，等待佩戴'
     } else if (payload.status === 'calibrating') {
       binding.eegStatusText = `校准中 ${Math.round(binding.calibrationProgress * 100)}%`

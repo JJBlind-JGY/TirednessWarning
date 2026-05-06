@@ -138,7 +138,7 @@ function createBinding(seed = 1) {
     eegRunning: false, eegStatus: 'idle', eegStatusText: '待接入', eegEmotion: '', eegEmotionZh: '', eegQualityLevel: '', signalQuality: null,
     lastValidEegEmotion: '', lastValidEegAt: 0, eegFusionCandidate: '', eegFusionStreak: 0, reasonCodes: [], features: {},
     emotion: 'normal', emotionZh: EMOTION_ZH.normal, fusionEmotion: 'normal', fusionEmotionZh: EMOTION_ZH.normal, fusionSource: 'waiting',
-    analysisTime: '', calibrationProgress: 0,
+    analysisTime: '', calibrationProgress: 0, baselineResetReason: '', baselineResetAt: '',
     indices: { anxiety_idx: 0, stress_idx: 0, fatigue_idx: 0, weakness_idx: 0 }, probs: {},
     bandSnapshot: { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }, rawWaveBuffer: [], waveScale: 1,
     faceConnected: false, faceImageUrl: '', faceStatusText: '待接入', faceStatus: 'idle', faceEmotion: '未识别', faceEmotionKey: '', faceScore: '--', faceRate: '--', faceRank: null, faceBox: null,
