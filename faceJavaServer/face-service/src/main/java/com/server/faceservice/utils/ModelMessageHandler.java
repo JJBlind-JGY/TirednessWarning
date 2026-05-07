@@ -47,6 +47,12 @@ public class ModelMessageHandler {
         String fatigueRank = normalizeNumber(json.get("fatigueRank"));
         Object faceBox = json.get("faceBox");
         Object scores7 = json.get("scores7");
+        String eyeStatus = json.getString("eyeStatus");
+        Boolean eyeClosed = json.getBoolean("eyeClosed");
+        String eyeClosedScore = normalizeScore(json.get("eyeClosedScore"));
+        String eyeOpenScore = normalizeScore(json.get("eyeOpenScore"));
+        Object eyeBoxes = json.get("eyeBoxes");
+        Object eyeCheckedAt = json.get("eyeCheckedAt");
         String image = json.getString("image");
 
         WebMessage response = new WebMessage(
@@ -59,6 +65,12 @@ public class ModelMessageHandler {
                 fatigueRank,
                 faceBox,
                 scores7,
+                eyeStatus,
+                eyeClosed,
+                eyeClosedScore,
+                eyeOpenScore,
+                eyeBoxes,
+                eyeCheckedAt,
                 System.currentTimeMillis(),
                 image
         );
@@ -111,11 +123,19 @@ class WebMessage {
     private final String fatigueRank;
     private final Object faceBox;
     private final Object scores7;
+    private final String eyeStatus;
+    private final Boolean eyeClosed;
+    private final String eyeClosedScore;
+    private final String eyeOpenScore;
+    private final Object eyeBoxes;
+    private final Object eyeCheckedAt;
     private final long timestamp;
     private final String image;
 
     public WebMessage(String userId, String status, String emotion5, String emotionCat, String score,
                       String fatigueIndex, String fatigueRank, Object faceBox, Object scores7,
+                      String eyeStatus, Boolean eyeClosed, String eyeClosedScore, String eyeOpenScore,
+                      Object eyeBoxes, Object eyeCheckedAt,
                       long timestamp, String image) {
         this.userId = userId;
         this.status = status;
@@ -126,6 +146,12 @@ class WebMessage {
         this.fatigueRank = fatigueRank;
         this.faceBox = faceBox;
         this.scores7 = scores7;
+        this.eyeStatus = eyeStatus;
+        this.eyeClosed = eyeClosed;
+        this.eyeClosedScore = eyeClosedScore;
+        this.eyeOpenScore = eyeOpenScore;
+        this.eyeBoxes = eyeBoxes;
+        this.eyeCheckedAt = eyeCheckedAt;
         this.timestamp = timestamp;
         this.image = image;
     }
@@ -139,6 +165,12 @@ class WebMessage {
     public String getFatigueRank() { return fatigueRank; }
     public Object getFaceBox() { return faceBox; }
     public Object getScores7() { return scores7; }
+    public String getEyeStatus() { return eyeStatus; }
+    public Boolean getEyeClosed() { return eyeClosed; }
+    public String getEyeClosedScore() { return eyeClosedScore; }
+    public String getEyeOpenScore() { return eyeOpenScore; }
+    public Object getEyeBoxes() { return eyeBoxes; }
+    public Object getEyeCheckedAt() { return eyeCheckedAt; }
     public long getTimestamp() { return timestamp; }
     public String getImage() { return image; }
 }

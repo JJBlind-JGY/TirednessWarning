@@ -48,7 +48,7 @@ public class CameraConfigService {
 
     public synchronized List<CameraConfig> list() {
         if (!Files.exists(configPath)) {
-            List<CameraConfig> initial = new ArrayList<>();
+            List<CameraConfig> initial = loadGo2RtcStreams();
             save(initial);
             return initial;
         }
@@ -60,6 +60,13 @@ public class CameraConfigService {
                     }
             );
             List<CameraConfig> normalized = cameras == null ? new ArrayList<>() : cameras;
+            if (normalized.isEmpty()) {
+                List<CameraConfig> imported = loadGo2RtcStreams();
+                if (!imported.isEmpty()) {
+                    save(imported);
+                    return imported;
+                }
+            }
             saveGo2RtcConfig(normalized);
             return normalized;
         } catch (IOException e) {
@@ -122,6 +129,11 @@ public class CameraConfigService {
     }
 
     private void saveGo2RtcConfig(List<CameraConfig> cameras) throws IOException {
+        if ((cameras == null || cameras.isEmpty()) && Files.exists(go2rtcConfigPath)) {
+            log.warn("Skip writing empty go2rtc stream config to preserve existing streams: {}", go2rtcConfigPath.toAbsolutePath());
+            return;
+        }
+
         Path parent = go2rtcConfigPath.toAbsolutePath().getParent();
         if (parent != null) {
             Files.createDirectories(parent);
@@ -142,6 +154,47 @@ public class CameraConfigService {
         yaml.append("api:\n");
         yaml.append("  listen: :1984\n");
         Files.writeString(go2rtcConfigPath, yaml.toString());
+    }
+
+    private List<CameraConfig> loadGo2RtcStreams() {
+        List<CameraConfig> cameras = new ArrayList<>();
+        if (!Files.exists(go2rtcConfigPath)) {
+            return cameras;
+        }
+
+        try {
+            List<String> lines = Files.readAllLines(go2rtcConfigPath, StandardCharsets.UTF_8);
+            boolean inStreams = false;
+            String streamName = null;
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
+                }
+                if (!line.startsWith(" ") && trimmed.endsWith(":")) {
+                    inStreams = "streams:".equals(trimmed);
+                    streamName = null;
+                    continue;
+                }
+                if (!inStreams) {
+                    continue;
+                }
+                if (line.startsWith("  ") && !line.startsWith("    ") && trimmed.endsWith(":")) {
+                    streamName = trimmed.substring(0, trimmed.length() - 1).trim();
+                    continue;
+                }
+                if (streamName != null && line.startsWith("    - ")) {
+                    String rtspUrl = trimmed.substring(2).trim();
+                    if (StringUtils.hasText(rtspUrl)) {
+                        cameras.add(new CameraConfig(streamName, streamName, rtspUrl, streamName));
+                    }
+                    streamName = null;
+                }
+            }
+        } catch (IOException e) {
+            log.warn("Failed to import streams from go2rtc config: {}", go2rtcConfigPath.toAbsolutePath(), e);
+        }
+        return cameras;
     }
 
     private void syncGo2RtcRuntime(List<CameraConfig> cameras) {

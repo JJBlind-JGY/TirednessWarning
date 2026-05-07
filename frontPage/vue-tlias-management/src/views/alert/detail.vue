@@ -1,5 +1,6 @@
 ﻿<script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
+import { ElNotification } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useMonitorCenter } from './useMonitorCenter'
 
@@ -42,6 +43,22 @@ function formatBand(value) { return `${Number(value || 0).toFixed(1)}%` }
 function formatFaceScore(value) { if (value == null || value === '--' || value === '') return '--'; const numeric = Number.parseFloat(String(value).replace('%', '')); return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : String(value) }
 function latestTime(bindingValue) { const value = bindingValue?.analysisTime || bindingValue?.lastValidFaceAt; return value ? formatShortTime(value) : '--:--:--' }
 function adviceText(bindingValue) { if (!bindingValue?.lastValidEegAt && !bindingValue?.lastValidFaceAt) return '等待有效数据'; return bindingValue.emotion === 'normal' ? '继续监测' : '建议关注' }
+watch(
+  () => binding.value?.eyeDetailPopupAt,
+  (popupAt) => {
+    if (!popupAt || !binding.value?.eyeDetailPopupActive) return
+    const personName = binding.value.personName || '\u5f53\u524d\u4eba\u5458'
+    ElNotification({
+      title: '\u95ed\u773c\u63d0\u793a',
+      message: `${personName} \u8fde\u7eed\u95ed\u773c\u5df2\u8d85\u8fc75\u79d2\uff0c\u8bf7\u5173\u6ce8\u5f53\u524d\u72b6\u6001\u3002`,
+      type: 'warning',
+      duration: 6000,
+      showClose: true,
+      position: 'top-right'
+    })
+    binding.value.eyeDetailPopupActive = false
+  }
+)
 </script>
 
 <template>
@@ -104,6 +121,7 @@ function adviceText(bindingValue) { if (!bindingValue?.lastValidEegAt && !bindin
           <div class="metric-box"><span>视频接入通道</span><strong>{{ getCameraLabel(binding.faceChannelId) }}</strong></div>
           <div class="metric-box"><span>视频更新时间</span><strong>{{ binding.lastValidFaceAt ? formatShortTime(binding.lastValidFaceAt) : '--:--:--' }}</strong></div>
           <div class="metric-box"><span>辅助信号状态</span><strong>{{ getFaceStatusLabel(binding) }}</strong></div>
+          <div class="metric-box"><span>{{ '\u95ed\u773c\u72b6\u6001' }}</span><strong>{{ binding.eyeStatusText || '\u7b49\u5f85\u6709\u6548\u4eba\u8138' }}</strong></div>
         </div>
       </article>
 

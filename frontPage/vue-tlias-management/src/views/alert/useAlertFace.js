@@ -35,7 +35,7 @@ function normalizeScore(value) {
   return Number.isFinite(numeric) ? numeric : 0
 }
 
-export function createFaceMonitor({ state, getBindingById, evaluateWarning, updateFusionState }) {
+export function createFaceMonitor({ state, getBindingById, evaluateWarning, updateFusionState, updateEyeState }) {
   let stompClient = null
   let stompSocket = null
   let stompConnected = false
@@ -61,6 +61,12 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
     binding.lastValidFaceScore = 0
     binding.faceAssistStreak = 0
     binding.faceStopRequired = false
+    binding.eyeStatus = 'waiting'
+    binding.eyeStatusText = '\u7b49\u5f85\u6709\u6548\u4eba\u8138'
+    binding.eyeClosed = null
+    binding.eyeClosedScore = 0
+    binding.eyeOpenScore = 0
+    binding.eyeBoxes = []
   }
   function applyCameraStatus(binding, payload) {
     const status = payload.status || 'offline'
@@ -124,6 +130,7 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
       binding.faceRate = '--'
       binding.faceRank = null
       clearCurrentFacePrediction(binding)
+      updateEyeState?.(binding, payload)
       binding.faceStopRequired = false
       updateFusionState?.(binding)
       evaluateWarning(binding)
@@ -143,6 +150,7 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
     binding.lastValidFaceScore = normalizeScore(payload.score)
     binding.faceAssistStreak = payload.emotion5 === 'normal' ? 0 : Number(binding.faceAssistStreak || 0) + 1
     binding.faceStopRequired = payload.emotion5 !== 'normal'
+    updateEyeState?.(binding, payload)
     updateFusionState?.(binding)
     evaluateWarning(binding)
   }

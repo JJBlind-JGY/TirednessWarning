@@ -2,11 +2,12 @@ import asyncio
 import json
 import base64
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 import yaml
 import websockets
 
-from face_emotion_model import DEFAULT_EMOTION_MODEL, DEFAULT_YUNET_MODEL, YuNetEmotiEffRecognizer
+from face_emotion_model import DEFAULT_EMOTION_MODEL, DEFAULT_EYE_MODEL, DEFAULT_YUNET_MODEL, YuNetEmotiEffRecognizer
 
 
 import warnings
@@ -99,6 +100,12 @@ async def process_tasks():
             "fatigueRank": result.fatigue_rank,
             "faceBox": result.face_box,
             "scores7": result.scores7,
+            "eyeStatus": result.eye_status,
+            "eyeClosed": result.eye_closed,
+            "eyeClosedScore": round(result.eye_closed_score * 100, 3),
+            "eyeOpenScore": round(result.eye_open_score * 100, 3),
+            "eyeBoxes": result.eye_boxes,
+            "eyeCheckedAt": int(time.time() * 1000),
             "image": image_b64,
         }
         await websocket.send(json.dumps(response, ensure_ascii=False))
@@ -317,8 +324,10 @@ if __name__ == "__main__":
     recognizer = YuNetEmotiEffRecognizer(
         yunet_model=resolve_local_path(config.get('yunet_model', DEFAULT_YUNET_MODEL)),
         emotion_model=resolve_local_path(config.get('emotion_model', DEFAULT_EMOTION_MODEL)),
+        eye_model=resolve_local_path(config.get('eye_model', DEFAULT_EYE_MODEL)),
         input_size=int(config.get('emotion_input_size', 260)),
         face_score_threshold=float(config.get('face_score_threshold', 0.7)),
+        eye_closed_threshold=float(config.get('eye_closed_threshold', 0.65)),
     )
     # 创建一个线程池执行器
     # executor = ThreadPoolExecutor(max_workers=10)
