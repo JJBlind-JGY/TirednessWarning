@@ -58,7 +58,7 @@ class YuNetEmotiEffRecognizer:
         eye_model=DEFAULT_EYE_MODEL,
         input_size=260,
         face_score_threshold=0.7,
-        eye_closed_threshold=0.65,
+        eye_closed_threshold=0.70,
     ):
         self.yunet_model = yunet_model
         self.emotion_model = emotion_model
@@ -247,7 +247,7 @@ class YuNetEmotiEffRecognizer:
 
         open_score = float(np.mean(open_scores))
         closed_score = float(np.mean(closed_scores))
-        closed = closed_score >= self.eye_closed_threshold
+        closed = min(closed_scores) >= self.eye_closed_threshold
         return {
             "status": "closed" if closed else "open",
             "closed": bool(closed),

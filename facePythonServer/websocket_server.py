@@ -327,7 +327,7 @@ if __name__ == "__main__":
         eye_model=resolve_local_path(config.get('eye_model', DEFAULT_EYE_MODEL)),
         input_size=int(config.get('emotion_input_size', 260)),
         face_score_threshold=float(config.get('face_score_threshold', 0.7)),
-        eye_closed_threshold=float(config.get('eye_closed_threshold', 0.65)),
+        eye_closed_threshold=float(config.get('eye_closed_threshold', 0.70)),
     )
     # 创建一个线程池执行器
     # executor = ThreadPoolExecutor(max_workers=10)

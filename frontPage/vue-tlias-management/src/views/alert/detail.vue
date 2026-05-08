@@ -50,7 +50,7 @@ watch(
     const personName = binding.value.personName || '\u5f53\u524d\u4eba\u5458'
     ElNotification({
       title: '\u95ed\u773c\u63d0\u793a',
-      message: `${personName} \u8fde\u7eed\u95ed\u773c\u5df2\u8d85\u8fc75\u79d2\uff0c\u8bf7\u5173\u6ce8\u5f53\u524d\u72b6\u6001\u3002`,
+      message: `${personName} \u8fde\u7eed\u95ed\u773c\u5df2\u8d85\u8fc78\u79d2\uff0c\u8bf7\u5173\u6ce8\u5f53\u524d\u72b6\u6001\u3002`,
       type: 'warning',
       duration: 6000,
       showClose: true,

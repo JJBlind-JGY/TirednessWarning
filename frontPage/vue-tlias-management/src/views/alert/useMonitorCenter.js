@@ -26,11 +26,11 @@ const ABNORMAL_MIN_RATIO = 0.25
 const STABLE_TIE_MARGIN = 0.08
 const EMPTY_SEGMENTS_BEFORE_WAITING = 2
 const EYE_WINDOW_MS = 30000
-const EYE_DETAIL_CONTINUOUS_MS = 5000
-const EYE_MAIN_TOTAL_MS = 10000
+const EYE_DETAIL_CONTINUOUS_MS = 8000
+const EYE_MAIN_CONTINUOUS_MS = 15000
 const EYE_MAIN_ALERT_COOLDOWN_MS = 60000
 const EYE_MAX_SAMPLE_GAP_MS = 3500
-const EYE_CLOSED_THRESHOLD = 65
+const EYE_CLOSED_THRESHOLD = 70
 let fusionRefreshTimer = null
 
 const EMOTION_ZH = {
@@ -321,7 +321,7 @@ function maybeTriggerEyeAlerts(binding, now = Date.now()) {
     binding.eyeDetailPopupAt = now
   }
 
-  if (binding.eyeTotalClosedMs < EYE_MAIN_TOTAL_MS) {
+  if (binding.eyeMaxContinuousClosedMs < EYE_MAIN_CONTINUOUS_MS) {
     binding.eyeMainAlertActive = false
     return
   }
@@ -332,7 +332,7 @@ function maybeTriggerEyeAlerts(binding, now = Date.now()) {
   binding.eyeMainAlertActive = true
   binding.eyeLastAlertAt = now
   const personName = binding.personName || EYE_TEXT.currentPerson
-  const message = `\u68c0\u6d4b\u5230 ${personName} 30\u79d2\u5185\u95ed\u773c\u7d2f\u8ba1\u8d85\u8fc710\u79d2\uff0c\u8bf7\u6ce8\u610f\u5f53\u524d\u72b6\u6001`
+  const message = `\u68c0\u6d4b\u5230 ${personName} \u8fde\u7eed\u95ed\u773c\u8d85\u8fc715\u79d2\uff0c\u8bf7\u6ce8\u610f\u5f53\u524d\u72b6\u6001`
   pushAlertHistory(binding, 'warning', message)
   ElNotification({ title: EYE_TEXT.mainTitle, message, type: 'warning', duration: 5000, showClose: true, position: 'top-right' })
 }
