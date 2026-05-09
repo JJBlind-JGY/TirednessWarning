@@ -15,22 +15,21 @@ const ABNORMAL_POPUP_COOLDOWN_MS = 90000
 const ABNORMAL_POPUP_STREAK_LIMIT = 2
 const ALERT_HISTORY_COOLDOWN_MS = 90000
 const ALERT_HISTORY_STREAK_LIMIT = 6
-const STABLE_STATE_SEGMENT_MS = 30000
+const STABLE_STATE_SEGMENT_MS = 20000
 const EEG_SAMPLE_WEIGHT = 1
 const FACE_SAMPLE_WEIGHT = 0.8
 const FACE_FATIGUE_BOOST = 0.2
 const FACE_MIN_CONFIDENCE = 0.5
-const SEGMENT_MIN_SAMPLES = 4
-const ABNORMAL_MIN_COUNT = 3
-const ABNORMAL_MIN_RATIO = 0.25
+const SEGMENT_MIN_SAMPLES = 3
+const ABNORMAL_MIN_COUNT = 2
+const ABNORMAL_MIN_RATIO = 0.18
 const STABLE_TIE_MARGIN = 0.08
 const EMPTY_SEGMENTS_BEFORE_WAITING = 2
-const EYE_WINDOW_MS = 30000
-const EYE_DETAIL_CONTINUOUS_MS = 8000
-const EYE_MAIN_CONTINUOUS_MS = 15000
+const EYE_WINDOW_MS = 20000
+const EYE_DETAIL_CONTINUOUS_MS = 6000
+const EYE_MAIN_CONTINUOUS_MS = 12000
 const EYE_MAIN_ALERT_COOLDOWN_MS = 60000
 const EYE_MAX_SAMPLE_GAP_MS = 3500
-const EYE_CLOSED_THRESHOLD = 70
 let fusionRefreshTimer = null
 
 const EMOTION_ZH = {
@@ -173,8 +172,10 @@ function createBinding(seed = 1) {
     faceConnected: false, faceImageUrl: '', faceStatusText: '待接入', faceStatus: 'idle', faceEmotion: '未识别', faceEmotionKey: '', faceScore: '--', faceRate: '--', faceRank: null, faceBox: null,
     lastValidFaceEmotion: '', lastValidFaceEmotionZh: '', lastValidFaceAt: 0, lastValidFaceScore: 0, lastRecordedFaceSampleAt: 0, faceAssistStreak: 0, faceStopRequired: false,
     eyeStatus: 'waiting', eyeStatusText: EYE_TEXT.waiting, eyeClosed: null, eyeClosedScore: 0, eyeOpenScore: 0, eyeBoxes: [], eyeLastValidAt: 0,
-    eyeSamples: [], eyeCurrentClosedStartedAt: 0, eyeMaxContinuousClosedMs: 0, eyeTotalClosedMs: 0,
-    eyeDetailPopupActive: false, eyeDetailPopupWindowId: 0, eyeDetailPopupAt: 0, eyeMainAlertActive: false, eyeMainAlertWindowId: 0, eyeLastAlertAt: 0,
+    eyeSamples: [],
+    eyeClosedStartedAt: 0, eyeCurrentClosedStartedAt: 0, eyeMaxContinuousClosedMs: 0, eyeTotalClosedMs: 0, eyeContinuousClosedMs: 0,
+    eyeDetailPopupActive: false, eyeDetailPopupWindowId: 0, eyeDetailPopupAt: 0, eyePopupLevel: '', eyePopupDismissedAt: 0,
+    eyeOpenStartedAt: 0, eyeContinuousOpenMs: 0, eyeMainAlertActive: false, eyeMainAlertWindowId: 0, eyeLastAlertAt: 0, eyeClosedAlertStage: '',
     videoUploading: false, uploadPercent: 0, localVideoUrl: '', videoWidth: 0, videoHeight: 0,
     fatigueStreak: 0, abnormalPopupCandidate: '', abnormalPopupStreak: 0, alertHistoryStreak: 0, lastPopupAt: 0, lastAlertHistoryAt: 0, hasPopupWarning: false, popupWarningActive: false, popupWarningEmotion: '', latestWarningLevel: 'info', latestEmotion: 'normal', faceSubscription: null
   })
@@ -271,6 +272,21 @@ function getEyeStatusText(payload) {
   return EYE_TEXT.waiting
 }
 
+function stopEyeTiming(binding) {
+  binding.eyeClosedStartedAt = 0
+  binding.eyeCurrentClosedStartedAt = 0
+  binding.eyeOpenStartedAt = 0
+  binding.eyeContinuousClosedMs = 0
+  binding.eyeContinuousOpenMs = 0
+}
+
+function resetEyeAlertStage(binding) {
+  binding.eyeDetailPopupActive = false
+  binding.eyeMainAlertActive = false
+  binding.eyePopupLevel = ''
+  binding.eyeClosedAlertStage = ''
+}
+
 function trimEyeSamples(binding, now = Date.now()) {
   const cutoff = now - EYE_WINDOW_MS
   binding.eyeSamples.splice(0, binding.eyeSamples.length, ...binding.eyeSamples.filter((sample) => Number(sample.ts || 0) >= cutoff))
@@ -280,61 +296,80 @@ function summarizeEyeWindow(binding, now = Date.now()) {
   trimEyeSamples(binding, now)
   const samples = [...binding.eyeSamples].sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0))
   let totalClosedMs = 0
-  let currentClosedMs = 0
   let maxContinuousClosedMs = 0
+  let currentClosedMs = 0
   let currentClosedStartedAt = 0
+  let previousClosedTs = 0
+  let latestOpenStartedAt = 0
 
-  for (let index = 0; index < samples.length; index += 1) {
-    const sample = samples[index]
-    const previous = samples[index - 1]
-    if (sample.closed && !currentClosedStartedAt) currentClosedStartedAt = sample.ts
+  samples.forEach((sample) => {
+    const ts = Number(sample.ts || 0)
+    if (!ts) return
     if (!sample.closed) {
       currentClosedMs = 0
       currentClosedStartedAt = 0
-      continue
+      previousClosedTs = 0
+      latestOpenStartedAt = ts
+      return
     }
-    if (!previous || !previous.closed) {
+    if (!currentClosedStartedAt || !previousClosedTs || ts - previousClosedTs > EYE_MAX_SAMPLE_GAP_MS) {
+      currentClosedStartedAt = ts
       currentClosedMs = 0
-      continue
+    } else {
+      const gap = Math.max(0, ts - previousClosedTs)
+      currentClosedMs += gap
+      totalClosedMs += gap
+      maxContinuousClosedMs = Math.max(maxContinuousClosedMs, currentClosedMs)
     }
-    const gap = Math.max(0, Number(sample.ts || 0) - Number(previous.ts || 0))
-    if (gap > EYE_MAX_SAMPLE_GAP_MS) {
-      currentClosedMs = 0
-      currentClosedStartedAt = sample.ts
-      continue
-    }
-    currentClosedMs += gap
-    totalClosedMs += gap
+    previousClosedTs = ts
+  })
+
+  const latestSample = samples[samples.length - 1]
+  if (latestSample?.closed && previousClosedTs && now - previousClosedTs <= EYE_MAX_SAMPLE_GAP_MS) {
+    const tailGap = Math.max(0, now - previousClosedTs)
+    currentClosedMs += tailGap
+    totalClosedMs += tailGap
     maxContinuousClosedMs = Math.max(maxContinuousClosedMs, currentClosedMs)
   }
 
   binding.eyeCurrentClosedStartedAt = currentClosedStartedAt
+  binding.eyeClosedStartedAt = currentClosedStartedAt
+  binding.eyeOpenStartedAt = latestSample && !latestSample.closed ? latestOpenStartedAt : 0
+  binding.eyeContinuousClosedMs = latestSample?.closed ? currentClosedMs : 0
+  binding.eyeContinuousOpenMs = latestSample && !latestSample.closed ? Math.max(0, now - latestOpenStartedAt) : 0
   binding.eyeMaxContinuousClosedMs = maxContinuousClosedMs
   binding.eyeTotalClosedMs = totalClosedMs
 }
 
 function maybeTriggerEyeAlerts(binding, now = Date.now()) {
-  const windowId = Math.floor(now / EYE_WINDOW_MS)
-  if (binding.eyeMaxContinuousClosedMs >= EYE_DETAIL_CONTINUOUS_MS && binding.eyeDetailPopupWindowId !== windowId) {
-    binding.eyeDetailPopupWindowId = windowId
-    binding.eyeDetailPopupActive = true
-    binding.eyeDetailPopupAt = now
+  if (binding.eyeMaxContinuousClosedMs < EYE_DETAIL_CONTINUOUS_MS) {
+    resetEyeAlertStage(binding)
+    return
   }
 
   if (binding.eyeMaxContinuousClosedMs < EYE_MAIN_CONTINUOUS_MS) {
+    binding.eyeDetailPopupWindowId = now
+    binding.eyeDetailPopupActive = true
+    binding.eyeDetailPopupAt = now
+    binding.eyePopupLevel = 'warning'
+    binding.eyeClosedAlertStage = 'detail'
     binding.eyeMainAlertActive = false
     return
   }
-  if (binding.eyeMainAlertWindowId === windowId) return
-  if (now - Number(binding.eyeLastAlertAt || 0) < EYE_MAIN_ALERT_COOLDOWN_MS) return
 
-  binding.eyeMainAlertWindowId = windowId
+  binding.eyeMainAlertWindowId = now
+  binding.eyeDetailPopupActive = true
+  binding.eyeDetailPopupAt = now
+  binding.eyePopupLevel = 'danger'
   binding.eyeMainAlertActive = true
+  const shouldNotifyMain = binding.eyeClosedAlertStage !== 'danger' && now - Number(binding.eyeLastAlertAt || 0) >= EYE_MAIN_ALERT_COOLDOWN_MS
+  binding.eyeClosedAlertStage = 'danger'
+  if (!shouldNotifyMain) return
   binding.eyeLastAlertAt = now
   const personName = binding.personName || EYE_TEXT.currentPerson
-  const message = `\u68c0\u6d4b\u5230 ${personName} \u8fde\u7eed\u95ed\u773c\u8d85\u8fc715\u79d2\uff0c\u8bf7\u6ce8\u610f\u5f53\u524d\u72b6\u6001`
+  const message = `\u68c0\u6d4b\u5230 ${personName} \u8fde\u7eed\u95ed\u773c\u8d85\u8fc712\u79d2\uff0c\u8bf7\u6ce8\u610f\u5f53\u524d\u72b6\u6001`
   pushAlertHistory(binding, 'warning', message)
-  ElNotification({ title: EYE_TEXT.mainTitle, message, type: 'warning', duration: 5000, showClose: true, position: 'top-right' })
+  ElNotification({ title: EYE_TEXT.mainTitle, message, type: 'error', duration: 5000, showClose: true, position: 'top-right', customClass: 'strong-alert-notification danger' })
 }
 
 function updateEyeState(binding, payload = {}) {
@@ -346,17 +381,18 @@ function updateEyeState(binding, payload = {}) {
 
   binding.eyeStatus = payload.eyeStatus || 'waiting'
   binding.eyeStatusText = getEyeStatusText(payload)
-  binding.eyeClosed = hasValidEye ? payload.eyeClosed === true : null
+  if (hasValidEye) binding.eyeClosed = payload.eyeClosed === true
   binding.eyeClosedScore = closedScore
   binding.eyeOpenScore = openScore
   binding.eyeBoxes = Array.isArray(payload.eyeBoxes) ? payload.eyeBoxes : []
 
   if (!hasValidEye) {
     summarizeEyeWindow(binding, Date.now())
+    maybeTriggerEyeAlerts(binding, Date.now())
     return
   }
 
-  const isClosedSample = payload.eyeClosed === true && closedScore >= EYE_CLOSED_THRESHOLD
+  const isClosedSample = payload.eyeClosed === true
   binding.eyeLastValidAt = now
   binding.eyeSamples.push({ ts: now, closed: isClosedSample, closedScore, openScore })
   summarizeEyeWindow(binding, now)
@@ -398,11 +434,18 @@ function clearHistorySamples(binding, source = '') {
     binding.eyeOpenScore = 0
     binding.eyeBoxes = []
     binding.eyeLastValidAt = 0
+    binding.eyeClosedStartedAt = 0
     binding.eyeCurrentClosedStartedAt = 0
     binding.eyeMaxContinuousClosedMs = 0
     binding.eyeTotalClosedMs = 0
+    binding.eyeContinuousClosedMs = 0
     binding.eyeDetailPopupActive = false
+    binding.eyePopupLevel = ''
+    binding.eyePopupDismissedAt = 0
+    binding.eyeOpenStartedAt = 0
+    binding.eyeContinuousOpenMs = 0
     binding.eyeMainAlertActive = false
+    binding.eyeClosedAlertStage = ''
   }
 }
 
@@ -579,7 +622,7 @@ function maybeShowAbnormalNotification(binding) {
   binding.popupWarningEmotion = binding.emotion
   binding.lastAlertHistoryAt = now
   pushAlertHistory(binding, 'warning')
-  ElNotification({ title: '状态提醒', message: `${binding.personName || '当前人员'} 检测为${binding.emotionZh}，请关注当前状态。`, type: 'warning', duration: 5000, showClose: true, position: 'top-right' })
+  ElNotification({ title: '状态提醒', message: `${binding.personName || '当前人员'} 检测为${binding.emotionZh}，请关注当前状态。`, type: 'warning', duration: 7000, showClose: true, position: 'top-right', customClass: 'strong-alert-notification' })
 }
 
 function shouldRecordAlertHistory(binding, level) {
@@ -623,6 +666,7 @@ function refreshFusionStates() {
       binding.faceAssistStreak = 0
     }
     summarizeEyeWindow(binding, now)
+    maybeTriggerEyeAlerts(binding, now)
     updateFusionState(binding)
     if (hadPrediction || hasPrediction(binding)) evaluateWarning(binding)
   })

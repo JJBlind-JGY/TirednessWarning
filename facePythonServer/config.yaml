@@ -8,6 +8,6 @@ emotion_model: ./models/enet_b2_7.onnx
 eye_model: ./models/open-closed-eye.onnx
 emotion_input_size: 260
 face_score_threshold: 0.7
-eye_closed_threshold: 0.70
+eye_closed_threshold: 0.65
 cert_path: ./certs/server-cert.pem
 key_path: ./certs/server-key.pem

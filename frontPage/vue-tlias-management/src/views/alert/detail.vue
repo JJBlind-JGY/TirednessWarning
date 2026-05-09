@@ -1,6 +1,5 @@
 ﻿<script setup>
-import { computed, watch } from 'vue'
-import { ElNotification } from 'element-plus'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMonitorCenter } from './useMonitorCenter'
 
@@ -43,26 +42,35 @@ function formatBand(value) { return `${Number(value || 0).toFixed(1)}%` }
 function formatFaceScore(value) { if (value == null || value === '--' || value === '') return '--'; const numeric = Number.parseFloat(String(value).replace('%', '')); return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : String(value) }
 function latestTime(bindingValue) { const value = bindingValue?.analysisTime || bindingValue?.lastValidFaceAt; return value ? formatShortTime(value) : '--:--:--' }
 function adviceText(bindingValue) { if (!bindingValue?.lastValidEegAt && !bindingValue?.lastValidFaceAt) return '等待有效数据'; return bindingValue.emotion === 'normal' ? '继续监测' : '建议关注' }
-watch(
-  () => binding.value?.eyeDetailPopupAt,
-  (popupAt) => {
-    if (!popupAt || !binding.value?.eyeDetailPopupActive) return
-    const personName = binding.value.personName || '\u5f53\u524d\u4eba\u5458'
-    ElNotification({
-      title: '\u95ed\u773c\u63d0\u793a',
-      message: `${personName} \u8fde\u7eed\u95ed\u773c\u5df2\u8d85\u8fc78\u79d2\uff0c\u8bf7\u5173\u6ce8\u5f53\u524d\u72b6\u6001\u3002`,
-      type: 'warning',
-      duration: 6000,
-      showClose: true,
-      position: 'top-right'
-    })
-    binding.value.eyeDetailPopupActive = false
-  }
-)
+const eyePopupLevel = computed(() => binding.value?.eyePopupLevel || 'warning')
+const eyePopupDanger = computed(() => eyePopupLevel.value === 'danger')
+const eyePopupTitle = computed(() => eyePopupDanger.value ? '\u7ea2\u8272\u95ed\u773c\u544a\u8b66' : '\u9ec4\u8272\u95ed\u773c\u63d0\u793a')
+const eyePopupMessage = computed(() => {
+  const personName = binding.value?.personName || '\u5f53\u524d\u4eba\u5458'
+  return eyePopupDanger.value
+    ? `${personName} \u8fde\u7eed\u95ed\u773c\u5df2\u8d85\u8fc712\u79d2\uff0c\u5df2\u540c\u6b65\u4e3b\u9875\u9762\u544a\u8b66\uff0c\u8bf7\u7acb\u5373\u5173\u6ce8\u3002`
+    : `${personName} \u8fde\u7eed\u95ed\u773c\u5df2\u8d85\u8fc76\u79d2\uff0c\u8bf7\u5173\u6ce8\u5f53\u524d\u72b6\u6001\u3002`
+})
+function closeEyePopup() {
+  if (!binding.value) return
+  binding.value.eyeDetailPopupActive = false
+  binding.value.eyePopupDismissedAt = Date.now()
+}
 </script>
 
 <template>
   <div v-if="binding" class="detail-page">
+    <div v-if="binding.eyeDetailPopupActive" class="eye-alert-mask">
+      <section class="eye-alert-card" :class="eyePopupLevel">
+        <div class="eye-alert-icon">{{ eyePopupDanger ? '!' : 'i' }}</div>
+        <div class="eye-alert-content">
+          <strong>{{ eyePopupTitle }}</strong>
+          <p>{{ eyePopupMessage }}</p>
+          <span>{{ '\u8fde\u7eed\u7741\u773c3\u79d2\u540e\u5c06\u81ea\u52a8\u5173\u95ed\uff0c\u4e5f\u53ef\u624b\u52a8\u5173\u95ed\u3002' }}</span>
+        </div>
+        <button class="eye-alert-close" type="button" @click="closeEyePopup">{{ '\u5173\u95ed' }}</button>
+      </section>
+    </div>
     <section class="top-bar">
       <div>
         <div class="kicker">单设备详情</div>
@@ -197,6 +205,19 @@ watch(
 .eeg-chart { height: 320px; width: 100%; }
 .chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #7b8a97; pointer-events: none; }
 .empty-wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; }
+.eye-alert-mask { position: fixed; inset: 0; z-index: 2400; display: flex; align-items: flex-start; justify-content: center; padding: 72px 20px 20px; background: rgba(15,23,42,.22); pointer-events: none; }
+.eye-alert-card { pointer-events: auto; width: min(760px, 100%); display: grid; grid-template-columns: 76px 1fr auto; gap: 20px; align-items: center; padding: 26px 28px; border-radius: 8px; border: 2px solid #f59e0b; background: #fffbeb; box-shadow: 0 28px 70px rgba(120,53,15,.28); color: #78350f; }
+.eye-alert-card.danger { border-color: #dc2626; background: #fef2f2; box-shadow: 0 28px 76px rgba(127,29,29,.34); color: #7f1d1d; }
+.eye-alert-icon { width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #f59e0b; color: #fff; font-size: 42px; font-weight: 900; line-height: 1; }
+.eye-alert-card.danger .eye-alert-icon { background: #dc2626; }
+.eye-alert-content strong { display: block; font-size: 28px; line-height: 1.2; }
+.eye-alert-content p { margin: 10px 0 8px; font-size: 20px; font-weight: 700; line-height: 1.55; }
+.eye-alert-content span { font-size: 15px; font-weight: 600; opacity: .82; }
+.eye-alert-close { min-width: 82px; height: 42px; border: 0; border-radius: 8px; background: rgba(15,23,42,.9); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; }
+:global(.strong-alert-notification) { width: 420px; border-width: 2px; box-shadow: 0 20px 48px rgba(120,53,15,.22); }
+:global(.strong-alert-notification .el-notification__title) { font-size: 20px; font-weight: 800; }
+:global(.strong-alert-notification .el-notification__content) { font-size: 16px; font-weight: 700; line-height: 1.6; }
+:global(.strong-alert-notification.danger) { box-shadow: 0 20px 52px rgba(127,29,29,.28); }
 @media (max-width: 1440px) { .content-grid { grid-template-columns: 1fr; } .config-grid, .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 960px) { .detail-page { padding: 16px; } .top-bar, .top-actions { flex-direction: column; align-items: flex-start; } .config-grid, .quick-grid, .result-grid, .signal-strip, .warning-grid, .band-grid { grid-template-columns: 1fr; } }
+@media (max-width: 960px) { .detail-page { padding: 16px; } .top-bar, .top-actions { flex-direction: column; align-items: flex-start; } .config-grid, .quick-grid, .result-grid, .signal-strip, .warning-grid, .band-grid { grid-template-columns: 1fr; } .eye-alert-card { grid-template-columns: 52px 1fr; padding: 20px; } .eye-alert-icon { width: 48px; height: 48px; font-size: 32px; } .eye-alert-content strong { font-size: 22px; } .eye-alert-content p { font-size: 17px; } .eye-alert-close { grid-column: 1 / -1; width: 100%; } }
 </style>

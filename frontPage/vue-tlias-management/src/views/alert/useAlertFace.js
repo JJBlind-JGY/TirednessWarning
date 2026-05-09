@@ -67,6 +67,17 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
     binding.eyeClosedScore = 0
     binding.eyeOpenScore = 0
     binding.eyeBoxes = []
+    binding.eyeSamples?.splice(0, binding.eyeSamples.length)
+    binding.eyeLastValidAt = 0
+    binding.eyeClosedStartedAt = 0
+    binding.eyeCurrentClosedStartedAt = 0
+    binding.eyeContinuousClosedMs = 0
+    binding.eyeOpenStartedAt = 0
+    binding.eyeContinuousOpenMs = 0
+    binding.eyeDetailPopupActive = false
+    binding.eyeMainAlertActive = false
+    binding.eyePopupLevel = ''
+    binding.eyeClosedAlertStage = ''
   }
   function applyCameraStatus(binding, payload) {
     const status = payload.status || 'offline'

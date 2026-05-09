@@ -62,6 +62,16 @@ function adviceText(binding) { if (!binding.lastValidEegAt && !binding.lastValid
       <el-alert v-if="!CAMERA_OPTIONS.length" type="warning" :closable="false" title="请先在设备管理中配置摄像头 RTSP 地址" />
     </section>
 
+    <section v-if="state.alertHistory.length" class="alert-board">
+      <div class="section-head"><h3>{{ '\u9884\u8b66\u5386\u53f2' }}</h3><span>{{ state.alertHistory.length }} {{ '\u6761' }}</span></div>
+      <div class="alert-list">
+        <div v-for="item in state.alertHistory" :key="item.id" class="alert-row" :class="item.level">
+          <div class="alert-main"><strong>{{ item.personName }}</strong><span>{{ item.device }}</span></div>
+          <p>{{ item.message }}</p><time>{{ item.time }}</time>
+        </div>
+      </div>
+    </section>
+
     <section v-if="state.bindings.length" class="card-grid">
       <article v-for="binding in state.bindings" :key="binding.id" class="device-card">
         <header class="card-header">
@@ -117,16 +127,6 @@ function adviceText(binding) { if (!binding.lastValidEegAt && !binding.lastValid
     </section>
 
     <el-empty v-else class="empty-bindings" description="暂无监测卡片" />
-
-    <section v-if="state.alertHistory.length" class="alert-board">
-      <div class="section-head"><h3>预警历史</h3></div>
-      <div class="alert-list">
-        <div v-for="item in state.alertHistory" :key="item.id" class="alert-row" :class="item.level">
-          <div class="alert-main"><strong>{{ item.personName }}</strong><span>{{ item.device }}</span></div>
-          <p>{{ item.message }}</p><time>{{ item.time }}</time>
-        </div>
-      </div>
-    </section>
   </div>
 </template>
 
@@ -147,12 +147,15 @@ function adviceText(binding) { if (!binding.lastValidEegAt && !binding.lastValid
 .toolbar { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; }
 .toolbar h2, .section-head h3, .card-header h3 { margin: 0; }
 .toolbar p, .card-header p { margin: 6px 0 0; color: #64748b; }
-.alert-board { padding: 20px 24px; }
-.alert-list { display: grid; gap: 12px; }
-.alert-row { display: grid; grid-template-columns: 1fr 1.6fr 180px; gap: 14px; align-items: center; padding: 14px 16px; border-radius: 8px; background: #f7fafc; }
-.alert-row.warning { background: #fff7e6; }
+.alert-board { padding: 20px 24px; border: 2px solid #f59e0b; background: linear-gradient(180deg, #fff7ed 0%, #fff 100%); box-shadow: 0 18px 44px rgba(180,83,9,.16); }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; color: #7c2d12; }
+.section-head span { padding: 4px 10px; border-radius: 999px; background: #fed7aa; color: #9a3412; font-size: 13px; font-weight: 700; }
+.alert-list { display: grid; gap: 12px; max-height: 300px; overflow-y: auto; padding-right: 8px; overscroll-behavior: contain; }
+.alert-row { display: grid; grid-template-columns: 1fr 1.6fr 180px; gap: 14px; align-items: center; padding: 16px 18px; border-radius: 8px; border-left: 6px solid #f59e0b; background: #fffbeb; box-shadow: 0 8px 18px rgba(146,64,14,.08); }
+.alert-row.warning { border-left-color: #dc2626; background: #fef2f2; }
 .alert-main span, .alert-row time { color: #64748b; }
-.alert-row p { margin: 0; }
+.alert-main strong { display: block; color: #7c2d12; font-size: 17px; }
+.alert-row p { margin: 0; color: #7f1d1d; font-weight: 700; line-height: 1.5; }
 .card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .empty-bindings { padding: 36px 20px; }
 .device-card { padding: 22px; }
@@ -165,6 +168,12 @@ function adviceText(binding) { if (!binding.lastValidEegAt && !binding.lastValid
 .summary-item span, .mini-line span { display: block; margin-bottom: 6px; font-size: 12px; color: #64748b; }
 .summary-item strong, .mini-line strong { font-size: 18px; color: #203444; }
 .enter-bar { margin-top: 18px; display: flex; justify-content: flex-end; }
+:global(.strong-alert-notification) { width: 420px; border-width: 2px; box-shadow: 0 20px 48px rgba(120,53,15,.22); }
+:global(.strong-alert-notification .el-notification__title) { font-size: 20px; font-weight: 800; }
+:global(.strong-alert-notification .el-notification__content) { font-size: 16px; font-weight: 700; line-height: 1.6; }
+:global(.strong-alert-notification.danger) { box-shadow: 0 20px 52px rgba(127,29,29,.28); }
 @media (max-width: 1200px) { .card-grid { grid-template-columns: 1fr; } }
 @media (max-width: 960px) { .overview-page { padding: 16px; } .hero-panel, .hero-metrics, .config-grid, .summary-grid, .mini-footer { grid-template-columns: 1fr; } .toolbar, .card-header, .card-actions, .alert-row { display: flex; flex-direction: column; align-items: flex-start; } }
 </style>
+
+
