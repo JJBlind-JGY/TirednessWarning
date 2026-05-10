@@ -29,7 +29,7 @@ public class ModelWebsocket extends WebSocketClient {
     private static final long MAX_RECONNECT_DELAY_MS = 30000;
     private static final long INITIAL_RECONNECT_DELAY_MS = 1000;
     private volatile boolean isReconnecting = false;
-    public boolean isConnected = true;
+    private volatile boolean isConnected = false;
     private final boolean shouldReconnect = true;
 
     public ModelWebsocket(URI serverUri) throws Exception {
@@ -132,6 +132,7 @@ public class ModelWebsocket extends WebSocketClient {
     @Override
     public void connect() {
         try {
+            isConnected = false;
             if (getURI().getScheme().equals("wss")) {
                 SSLContext sslContext = createIgnoreVerifySSL();
                 SSLSocketFactory factory = sslContext.getSocketFactory();
@@ -141,5 +142,9 @@ public class ModelWebsocket extends WebSocketClient {
         } catch (Exception e) {
             LOGGER.error("failed to connect model websocket", e);
         }
+    }
+
+    public boolean isConnected() {
+        return isConnected && isOpen();
     }
 }

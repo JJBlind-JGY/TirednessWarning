@@ -91,6 +91,11 @@ public class FaceDetectController {
         return R.ok(Map.of("data", cameraConfigService.list()));
     }
 
+    @GetMapping("/cameras/status")
+    public R listCameraStatuses() {
+        return R.ok(Map.of("data", videoStreamAutoRunner.getCameraStatuses()));
+    }
+
     @PostMapping("/cameras")
     public R saveCamera(@RequestBody CameraConfig camera) {
         try {

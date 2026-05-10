@@ -4,12 +4,15 @@ import * as Stomp from 'stompjs'
 const FACE_FATIGUE_WS_URL = '/wss'
 const FACE_FRAME_MIN_INTERVAL = 120
 const FACE_STATUS_TEXT = {
-  online: '摄像头在线，等待识别',
-  reconnecting: '摄像头自动重连中',
-  offline: '摄像头离线',
-  no_frame: '摄像头无画面',
-  model_offline: '面部模型离线'
+  online: '\u89c6\u9891\u6d41\u5df2\u8fde\u63a5\uff0c\u7b49\u5f85\u6a21\u578b\u8bc6\u522b',
+  stream_ready: '\u89c6\u9891\u6d41\u5df2\u6062\u590d',
+  reconnecting: '\u89c6\u9891\u6d41\u6062\u590d\u4e2d',
+  camera_unreachable: '\u6444\u50cf\u5934\u672a\u5c31\u7eea\uff0c\u7b49\u5f85 RTSP \u7aef\u53e3',
+  offline: '\u6444\u50cf\u5934\u79bb\u7ebf',
+  no_frame: '\u6444\u50cf\u5934\u65e0\u753b\u9762',
+  model_offline: '\u9762\u90e8\u6a21\u578b\u79bb\u7ebf'
 }
+const STREAM_REFRESH_STATUSES = new Set(['stream_ready', 'reconnecting', 'online'])
 
 function guessImageMime(base64) {
   if (base64.startsWith('/9j/')) return 'image/jpeg'
@@ -52,6 +55,7 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
   function getBindingTopic(binding) { return String(binding?.faceChannelId || '').trim() }
   function getTopicBindings(topic) { return state.bindings.filter((binding) => getBindingTopic(binding) === topic) }
   function setBindingState(binding, { connected, statusText }) { if (binding) { binding.faceConnected = connected; binding.faceStatusText = statusText } }
+  function bumpStreamVersion(binding) { if (binding) binding.faceStreamVersion = Number(binding.faceStreamVersion || 0) + 1 }
   function isCameraStatus(status) { return Object.prototype.hasOwnProperty.call(FACE_STATUS_TEXT, status) }
   function clearCurrentFacePrediction(binding) {
     if (!binding) return
@@ -83,8 +87,9 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
     const status = payload.status || 'offline'
     binding.faceStatus = status
     binding.faceStatusText = FACE_STATUS_TEXT[status] || '摄像头状态未知'
-    binding.faceConnected = status === 'online'
-    if (status !== 'online') {
+    binding.faceConnected = status === 'online' || status === 'stream_ready'
+    if (STREAM_REFRESH_STATUSES.has(status)) bumpStreamVersion(binding)
+    if (status !== 'online' && status !== 'stream_ready') {
       binding.faceImageUrl = ''
       binding.faceEmotionKey = ''
       binding.faceEmotion = '未识别'

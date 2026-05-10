@@ -9,6 +9,7 @@ const CAMERA_STORAGE_KEY = 'alert-camera-options'
 const BINDINGS_STORAGE_KEY = 'alert-bindings'
 const FACE_SERVICE_BASE = '/face-api/faceDetectService'
 const GO2RTC_BASE_URL = import.meta.env.VITE_GO2RTC_BASE_URL || 'http://127.0.0.1:1984'
+const MAX_MONITOR_BINDINGS = Number(import.meta.env.VITE_MAX_MONITOR_BINDINGS || 24)
 const VALID_EEG_HOLD_MS = 10000
 const VALID_FACE_HOLD_MS = 8000
 const ABNORMAL_POPUP_COOLDOWN_MS = 90000
@@ -699,7 +700,7 @@ async function initMonitorCenter() {
   loadBindings(); syncBindingsWithDevices(); syncBindingsWithCameras(); faceMonitor.ensureFaceConnection(); state.bindings.forEach((binding) => faceMonitor.subscribeFace(binding)); eegMonitor.ensureAllAutoEeg(); state.initialized = true
 }
 
-function addBinding() { if (state.bindings.length >= 4) { ElMessage.warning('最多同时监测 4 张卡片'); return } const binding = createBinding(state.bindings.length + 1); state.bindings.push(binding); persistBindings(); faceMonitor.subscribeFace(binding); eegMonitor.ensureAutoEeg(binding) }
+function addBinding() { if (state.bindings.length >= MAX_MONITOR_BINDINGS) { ElMessage.warning(`最多同时监测 ${MAX_MONITOR_BINDINGS} 张卡片`); return } const binding = createBinding(state.bindings.length + 1); state.bindings.push(binding); persistBindings(); faceMonitor.subscribeFace(binding); eegMonitor.ensureAutoEeg(binding) }
 function removeBinding(bindingId) { eegMonitor.stopEeg(bindingId); faceMonitor.unsubscribeFace(bindingId); eegMonitor.disposeChart(bindingId); const index = state.bindings.findIndex((item) => item.id === bindingId); if (index === -1) return; const binding = state.bindings[index]; if (binding.localVideoUrl) URL.revokeObjectURL(binding.localVideoUrl); state.bindings.splice(index, 1); persistBindings() }
 
 async function syncRemotePersonnel(personnel) { const response = await fetch(`${FACE_SERVICE_BASE}/personnel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: personnel.id, uid: personnel.uid, name: personnel.name, type: personnel.type }) }); if (!response.ok) throw new Error(`personnel save failed: ${response.status}`) }

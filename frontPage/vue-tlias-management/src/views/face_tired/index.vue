@@ -145,8 +145,9 @@ const randomString = (e) =>{
 
 // 定义 stompClient
 const stompClient = ref(null);
-const RTSP_USER_ID = 'camera_001';
-var userId = RTSP_USER_ID;
+const DEFAULT_CAMERA_ID = 'camera_01';
+const cameras = ref([]);
+var userId = DEFAULT_CAMERA_ID;
 const fatigueRank = ref(null);
 const emotionCat = ref(null);
 const score = ref(null);
@@ -161,32 +162,55 @@ const normalizeIncomingImage = (image) => {
   return `data:image/jpeg;base64,${trimmed}`;
 };
 
+const loadDefaultCamera = async () => {
+  try {
+    const response = await axios.get('/face-api/faceDetectService/cameras');
+    const items = Array.isArray(response?.data?.data) ? response.data.data : [];
+    cameras.value = items;
+    if (items[0]?.id) {
+      userId = items[0].id;
+    }
+  } catch (error) {
+    console.warn('Failed to load camera config, use fallback camera id:', error);
+  }
+};
+
+const updateFrameSize = (imageUrl) => {
+  if (!imageUrl) return;
+  const image = new Image();
+  image.onload = () => {
+    videoWidth.value = image.naturalWidth || 0;
+    videoHeight.value = image.naturalHeight || 0;
+  };
+  image.src = imageUrl;
+};
+
 const subscribeTopics = () => {
   subscriptions.value.forEach(sub => sub.unsubscribe());
   subscriptions.value = [];
-  const videoSubscription = stompClient.value.subscribe(`/topic/face_video/${userId}`, (message) => {
-    if (!message.body) return;
-    try {
-      const data = JSON.parse(message.body);
-      currentFrame.value = normalizeIncomingImage(data.image);
-    } catch (error) {
-      console.error('Failed to parse video frame message:', error);
-    }
-  });
-  subscriptions.value.push(videoSubscription);
   // 订阅 "/topic" 目标
     const fatigueSubscription = stompClient.value.subscribe(`/topic/face_fatigue/${userId}`, (message) => {
     if (message.body) {
         try {
             const data = JSON.parse(message.body);
             console.log('Received message:', data);
+            const image = normalizeIncomingImage(data.image);
+            if (image) {
+              currentFrame.value = image;
+              updateFrameSize(image);
+            }
+            if (data.status && data.status !== 'ok' && !data.emotion5) {
+              return;
+            }
             const rank = parseInt(data.fatigueRank);
             const tempIndex = parseFloat(data.fatigueIndex);
-            fatigueRank.value = rank; 
-            emotionCat.value = data.emotionCat;
-            score.value = data.score;
-            rate.value = data.rate;
-            updateChart(tempIndex); // 新增：更新图表
+            fatigueRank.value = Number.isFinite(rank) ? rank : fatigueRank.value;
+            emotionCat.value = data.emotionCat || emotionCat.value;
+            score.value = data.score ?? score.value;
+            rate.value = data.rate ?? rate.value;
+            if (Number.isFinite(tempIndex)) {
+              updateChart(tempIndex);
+            }
             // console.log(fatigueRank.value)
         } catch (error) {
             console.error('Failed to parse message:', error);
@@ -272,8 +296,9 @@ const disconnect = () => {
 
 
 // 生命周期钩子：组件挂载时连接 WebSocket
-onMounted(() => {
+onMounted(async () => {
   initChart();
+  await loadDefaultCamera();
   connect();
 });
 

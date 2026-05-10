@@ -33,6 +33,11 @@ useMonitorCenterPage()
 const binding = computed(() => getBindingById(route.params.id))
 const selectedCamera = computed(() => CAMERA_OPTIONS.find((item) => item.id === binding.value?.faceChannelId))
 const faceStreamUrl = computed(() => selectedCamera.value?.streamUrl || '')
+const versionedFaceStreamUrl = computed(() => {
+  if (!faceStreamUrl.value) return ''
+  const separator = faceStreamUrl.value.includes('?') ? '&' : '?'
+  return `${faceStreamUrl.value}${separator}v=${binding.value?.faceStreamVersion || 0}`
+})
 
 function handlePersonChange() { if (binding.value) { updateBindingPerson(binding.value); persistBindings() } }
 function handleDeviceChange() { if (binding.value) updateBindingDevice(binding.value) }
@@ -121,7 +126,7 @@ function closeEyePopup() {
           <h3>微表情视频与识别</h3>
           <el-tag :type="binding.faceConnected ? 'success' : 'info'">{{ getFaceStatusLabel(binding) }}</el-tag>
         </div>
-        <div v-if="faceStreamUrl" class="video-box"><iframe class="result-video" :src="faceStreamUrl" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>
+        <div v-if="versionedFaceStreamUrl" class="video-box"><iframe :key="versionedFaceStreamUrl" class="result-video" :src="versionedFaceStreamUrl" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>
         <el-image v-else-if="binding.faceImageUrl" :src="binding.faceImageUrl" fit="contain" class="result-image" />
         <div v-else class="empty-box">等待视频流</div>
         <div class="result-grid">

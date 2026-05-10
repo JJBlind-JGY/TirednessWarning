@@ -24,6 +24,11 @@ const selectedBindingId = computed(() => route.params.id || route.query.binding 
 const binding = computed(() => getBindingById(selectedBindingId.value))
 const selectedCamera = computed(() => CAMERA_OPTIONS.find((item) => item.id === binding.value?.faceChannelId))
 const streamUrl = computed(() => selectedCamera.value?.streamUrl || '')
+const versionedStreamUrl = computed(() => {
+  if (!streamUrl.value) return ''
+  const separator = streamUrl.value.includes('?') ? '&' : '?'
+  return `${streamUrl.value}${separator}v=${binding.value?.faceStreamVersion || 0}`
+})
 
 function openBinding(bindingId) {
   if (!bindingId) return
@@ -73,9 +78,10 @@ function openBinding(bindingId) {
 
       <div class="video-stage">
         <iframe
-          v-if="streamUrl"
+          v-if="versionedStreamUrl"
+          :key="versionedStreamUrl"
           class="face-stream"
-          :src="streamUrl"
+          :src="versionedStreamUrl"
           allow="autoplay; fullscreen; picture-in-picture"
           allowfullscreen
         ></iframe>

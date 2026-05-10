@@ -4,6 +4,8 @@ import base64
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
 import yaml
 import websockets
 
@@ -15,6 +17,8 @@ import warnings
 warnings.filterwarnings("ignore")
 executor = None
 recognizer = None
+scheduler = None
+executor_workers = 0
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -68,20 +72,93 @@ def normlize(x):
     return x
 
 
+class LatestFrameScheduler:
+    def __init__(self):
+        self.latest_frames = {}
+        self.ready_users = asyncio.Queue()
+        self.queued_users = set()
+        self.lock = asyncio.Lock()
+        self.received_count = 0
+        self.processed_count = 0
+        self.dropped_count = 0
+        self.error_count = 0
+        self.total_inference_ms = 0.0
+        self.max_inference_ms = 0.0
+
+    async def submit(self, user_id, frame_data, websocket):
+        if not user_id:
+            return
+        async with self.lock:
+            if user_id in self.latest_frames:
+                self.dropped_count += 1
+            self.latest_frames[user_id] = (frame_data, websocket, time.time())
+            self.received_count += 1
+            if user_id not in self.queued_users:
+                self.queued_users.add(user_id)
+                await self.ready_users.put(user_id)
+
+    async def take(self):
+        while True:
+            user_id = await self.ready_users.get()
+            async with self.lock:
+                self.queued_users.discard(user_id)
+                item = self.latest_frames.pop(user_id, None)
+            if item is not None:
+                frame_data, websocket, queued_at = item
+                return user_id, frame_data, websocket, queued_at
+
+    async def mark_processed(self, inference_ms):
+        async with self.lock:
+            self.processed_count += 1
+            self.total_inference_ms += inference_ms
+            self.max_inference_ms = max(self.max_inference_ms, inference_ms)
+
+    async def mark_error(self):
+        async with self.lock:
+            self.error_count += 1
+
+    async def snapshot(self):
+        async with self.lock:
+            avg_ms = self.total_inference_ms / self.processed_count if self.processed_count else 0.0
+            return {
+                "status": "ok",
+                "activeUsers": len(self.latest_frames) + len(self.queued_users),
+                "queuedUsers": self.ready_users.qsize(),
+                "receivedCount": self.received_count,
+                "processedCount": self.processed_count,
+                "droppedCount": self.dropped_count,
+                "errorCount": self.error_count,
+                "avgInferenceMs": round(avg_ms, 3),
+                "maxInferenceMs": round(self.max_inference_ms, 3),
+                "executorWorkers": executor_workers,
+                "updatedAt": int(time.time() * 1000),
+            }
+
+
 # 处理任务的协程
 async def process_tasks():
     print("Task consumer started")
     while True:
         # 从队列中获取任务
-        user_id, frame_data, websocket = await task_queue.get()
-
-        result = await asyncio.get_running_loop().run_in_executor(
-            executor,
-            recognizer.predict_from_bytes,
-            frame_data,
-            True,
-            '.jpg'
-        )
+        user_id, frame_data, websocket, queued_at = await scheduler.take()
+        started_at = time.perf_counter()
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                executor,
+                recognizer.predict_from_bytes,
+                frame_data,
+                True,
+                '.jpg'
+            )
+        except Exception as e:
+            await scheduler.mark_error()
+            try:
+                await websocket.send(json.dumps({"status": "error", "userId": user_id, "error": str(e)}, ensure_ascii=False))
+            except Exception:
+                pass
+            continue
+        inference_ms = (time.perf_counter() - started_at) * 1000
+        await scheduler.mark_processed(inference_ms)
         image_b64 = ""
         if result.image_bytes is not None:
             image_b64 = base64.b64encode(result.image_bytes).decode('utf-8')
@@ -106,9 +183,15 @@ async def process_tasks():
             "eyeOpenScore": round(result.eye_open_score * 100, 3),
             "eyeBoxes": result.eye_boxes,
             "eyeCheckedAt": int(time.time() * 1000),
+            "modelQueuedMs": round(max(0, time.time() - queued_at) * 1000, 3),
+            "modelInferenceMs": round(inference_ms, 3),
             "image": image_b64,
         }
-        await websocket.send(json.dumps(response, ensure_ascii=False))
+        try:
+            await websocket.send(json.dumps(response, ensure_ascii=False))
+        except Exception as e:
+            await scheduler.mark_error()
+            print(f"[WARN] send result failed for {user_id}: {e}")
         continue
 
         # print('get data from queue')
@@ -188,7 +271,7 @@ async def handle_connection(websocket):
             # 这里可以将图片保存到磁盘或进行其他处理
             img_data = base64.b64decode(frame_data)
             # 发给模型识别
-            await task_queue.put((user_id, img_data, websocket))
+            await scheduler.submit(user_id, img_data, websocket)
             # print(f"[DEBUG] Queue size after put: {task_queue.qsize()}")
             # print('put data in queue')
         except json.JSONDecodeError:
@@ -257,6 +340,38 @@ def process_frame(frame_data):
 #     async with websockets.serve(handle_connection, "localhost", 8765):
 #         print("WebSocket server started on ws://localhost:8765")
 #         await asyncio.Future()  # Keep the server running
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path not in ("/health", "/metrics"):
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        if scheduler is None:
+            payload = {"status": "starting", "updatedAt": int(time.time() * 1000)}
+        else:
+            future = asyncio.run_coroutine_threadsafe(scheduler.snapshot(), HealthHandler.loop)
+            payload = future.result(timeout=2)
+
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_health_server(host, port, loop):
+    HealthHandler.loop = loop
+    server = ThreadingHTTPServer((host, port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, name="face-health-server", daemon=True)
+    thread.start()
+    print(f"Health server started on http://{host}:{port}/health")
+
+
 def read_config(file_path):
     try:
         with open(file_path, 'r') as file:
@@ -271,8 +386,8 @@ def read_config(file_path):
 
 
 async def main():
-    global task_queue
-    task_queue = asyncio.Queue(1000)  # 全局唯一队列
+    global scheduler
+    scheduler = LatestFrameScheduler()
 
     # 读取文件配置
     config = read_config('config.yaml')  # 请确保该文件存在
@@ -280,10 +395,14 @@ async def main():
         port = config.get('port')
         url = config.get('url')
         task_workers = int(config.get('task_workers', 1))
+        health_port = int(config.get('health_port', 8766))
     else:
         port = 8765
         url = '0.0.0.0'
         task_workers = 1
+        health_port = 8766
+
+    start_health_server(url, health_port, asyncio.get_running_loop())
 
     # 初始化任务处理器。多个消费者可以并发处理不同摄像头发送来的帧。
     task_processors = [

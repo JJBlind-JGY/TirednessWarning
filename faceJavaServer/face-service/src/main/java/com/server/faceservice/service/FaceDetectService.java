@@ -5,38 +5,47 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.server.faceservice.utils.ModelWebsocket;
 import com.server.faceservice.utils.SafeWebSocketSender;
 import jakarta.annotation.PostConstruct;
-import org.springframework.beans.factory.annotation.Value;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.Java2DFrameConverter;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.Base64;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Base64;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class FaceDetectService {
-    private static final int FRAME_SKIP_INTERVAL = 30;
     private static final int FRAME_PROCESSING_THREADS = Math.max(4, Runtime.getRuntime().availableProcessors());
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final Map<String, CameraSamplingState> cameraStates = new ConcurrentHashMap<>();
+
     @Autowired
-    ModelWebsocket modelWebsocket;
+    private ModelWebsocket modelWebsocket;
 
     @Autowired
     private SimpMessagingTemplate messagingTemplate;
 
     @Value("${websocket.webUser.url:/topic/face_fatigue/}")
     private String faceFatigueUrl;
+
+    @Value("${face.camera.sample-interval-ms:1000}")
+    private long sampleIntervalMs;
 
     private SafeWebSocketSender sender;
     private final ThreadPoolExecutor frameProcessingExecutor = new ThreadPoolExecutor(
@@ -55,17 +64,59 @@ public class FaceDetectService {
     }
 
     public boolean isConnected() {
-        return modelWebsocket.isConnected;
+        return modelWebsocket.isConnected();
+    }
+
+    public void clearCamera(String userId) {
+        if (sender != null) {
+            sender.clearCamera(userId);
+        }
+        cameraStates.remove(userId);
+    }
+
+    public long getLastFrameSentAt(String userId) {
+        return stateFor(userId).lastFrameSentAt.get();
+    }
+
+    public Map<String, Object> getCameraMetrics(String userId) {
+        CameraSamplingState state = stateFor(userId);
+        Map<String, Object> metrics = new HashMap<>(sender.metricsSnapshot(userId));
+        metrics.put("framesCaptured", state.framesCaptured.get());
+        metrics.put("framesSkipped", state.framesSkipped.get());
+        metrics.put("staleTasksDropped", state.staleTasksDropped.get());
+        metrics.put("lastCapturedAt", state.lastCapturedAt.get());
+        metrics.put("lastFrameAt", Math.max(state.lastFrameSentAt.get(), state.lastCapturedAt.get()));
+        return metrics;
+    }
+
+    private CameraSamplingState stateFor(String userId) {
+        return cameraStates.computeIfAbsent(userId, ignored -> new CameraSamplingState());
+    }
+
+    private long nextGeneration(String userId) {
+        CameraSamplingState state = stateFor(userId);
+        state.lastSampleAt.set(0);
+        return state.generation.incrementAndGet();
+    }
+
+    private boolean shouldSample(String userId, long now) {
+        CameraSamplingState state = stateFor(userId);
+        long previous = state.lastSampleAt.get();
+        if (previous > 0 && now - previous < sampleIntervalMs) {
+            state.framesSkipped.incrementAndGet();
+            return false;
+        }
+        return state.lastSampleAt.compareAndSet(previous, now);
     }
 
     private void sendFrame(byte[] frameData, String userId) {
         String base64Image = Base64.getEncoder().encodeToString(frameData);
-        ObjectMapper objectMapper = new ObjectMapper();
         try {
             String jsonMessage = objectMapper.writeValueAsString(Map.of("userId", userId, "frame", base64Image));
-            sender.sendAsync(jsonMessage.getBytes());
+            sender.sendAsync(userId, jsonMessage.getBytes());
+            stateFor(userId).lastFrameSentAt.set(System.currentTimeMillis());
         } catch (JsonProcessingException e) {
-            e.printStackTrace();
+            throw new IllegalStateException("Failed to serialize camera frame payload", e);
         }
     }
 
@@ -79,52 +130,66 @@ public class FaceDetectService {
     }
 
     public void processVideo(String rtspUrl, String userId) throws Exception {
+        long generation = nextGeneration(userId);
         try (FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(rtspUrl)) {
-            grabber.setOption("rtsp_transport", "tcp");
-            grabber.setOption("fflags", "nobuffer");
-            grabber.setOption("flags", "low_delay");
-            grabber.setOption("max_delay", "500000");
-            grabber.setOption("probesize", "32768");
-            grabber.setOption("analyzeduration", "0");
-            grabber.setOption("stimeout", "5000000");
-            grabber.setOption("buffer_size", "1048576");
-            grabber.setVideoOption("autorotate", "1");
+            configureGrabber(grabber);
 
             grabber.start();
             if (grabber.grabImage() == null) {
-                publishCameraStatus(userId, "no_frame", "摄像头未读取到首帧");
+                publishCameraStatus(userId, "no_frame", "No frame received from camera.");
                 throw new Exception("Failed to grab the first frame from the video stream.");
             }
-            publishCameraStatus(userId, "online", "摄像头视频流在线");
+            publishCameraStatus(userId, "online", "Camera stream connected.");
 
             Frame frame;
-            int skipped = 0;
             while (!Thread.currentThread().isInterrupted() && (frame = grabber.grabImage()) != null) {
-                if (skipped < FRAME_SKIP_INTERVAL) {
-                    skipped += 1;
-                    continue;
-                }
-                skipped = 0;
-
                 if (frame.image == null) {
                     continue;
                 }
 
+                long now = System.currentTimeMillis();
+                if (!shouldSample(userId, now)) {
+                    continue;
+                }
+
+                stateFor(userId).framesCaptured.incrementAndGet();
+                stateFor(userId).lastCapturedAt.set(now);
                 final Frame finalFrame = frame.clone();
                 frameProcessingExecutor.submit(() -> {
+                    CameraSamplingState state = stateFor(userId);
+                    if (state.generation.get() != generation) {
+                        state.staleTasksDropped.incrementAndGet();
+                        return;
+                    }
                     try {
                         byte[] imageBytes = convertFrameToJpeg(finalFrame);
-                        sendFrame(imageBytes, userId);
+                        if (state.generation.get() == generation) {
+                            sendFrame(imageBytes, userId);
+                        } else {
+                            state.staleTasksDropped.incrementAndGet();
+                        }
                     } catch (IOException ignored) {
                     }
                 });
             }
-            publishCameraStatus(userId, "offline", "摄像头视频流已结束");
+            publishCameraStatus(userId, "offline", "Camera stream ended.");
         } catch (FFmpegFrameGrabber.Exception e) {
             publishCameraStatus(userId, "offline", e.getMessage());
             System.err.println("RTSP Stream Error: " + e.getMessage());
             throw e;
         }
+    }
+
+    private void configureGrabber(FFmpegFrameGrabber grabber) {
+        grabber.setOption("rtsp_transport", "tcp");
+        grabber.setOption("fflags", "nobuffer");
+        grabber.setOption("flags", "low_delay");
+        grabber.setOption("max_delay", "500000");
+        grabber.setOption("probesize", "32768");
+        grabber.setOption("analyzeduration", "0");
+        grabber.setOption("stimeout", "5000000");
+        grabber.setOption("buffer_size", "1048576");
+        grabber.setVideoOption("autorotate", "1");
     }
 
     @SuppressWarnings("all")
@@ -152,7 +217,22 @@ public class FaceDetectService {
                 image.getHeight(),
                 BufferedImage.TYPE_3BYTE_BGR
         );
-        convertedImage.getGraphics().drawImage(image, 0, 0, null);
+        Graphics2D graphics = convertedImage.createGraphics();
+        try {
+            graphics.drawImage(image, 0, 0, null);
+        } finally {
+            graphics.dispose();
+        }
         return convertedImage;
+    }
+
+    private static class CameraSamplingState {
+        private final AtomicLong generation = new AtomicLong(0);
+        private final AtomicLong lastSampleAt = new AtomicLong(0);
+        private final AtomicLong lastCapturedAt = new AtomicLong(0);
+        private final AtomicLong lastFrameSentAt = new AtomicLong(0);
+        private final AtomicLong framesCaptured = new AtomicLong(0);
+        private final AtomicLong framesSkipped = new AtomicLong(0);
+        private final AtomicLong staleTasksDropped = new AtomicLong(0);
     }
 }

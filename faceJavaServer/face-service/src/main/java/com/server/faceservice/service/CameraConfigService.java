@@ -103,6 +103,22 @@ public class CameraConfigService {
         return removed;
     }
 
+    public synchronized boolean refreshRuntime(CameraConfig camera) {
+        if (camera == null || !StringUtils.hasText(camera.getRtspUrl())) {
+            return false;
+        }
+        boolean streamUpdated = syncStreamsViaApi(List.of(camera));
+        boolean reloaded = tryGo2RtcRequest("POST", "/api/reload") || tryGo2RtcRequest("GET", "/api/reload");
+        boolean refreshed = streamUpdated || reloaded;
+        if (refreshed) {
+            log.info("go2rtc runtime refreshed for stream: {}", StringUtils.hasText(camera.getStreamName()) ? camera.getStreamName() : camera.getId());
+        } else {
+            log.warn("go2rtc runtime refresh failed for stream: {}. Restart go2rtc if the browser stream remains stale.",
+                    StringUtils.hasText(camera.getStreamName()) ? camera.getStreamName() : camera.getId());
+        }
+        return refreshed;
+    }
+
     private CameraConfig normalize(CameraConfig camera) {
         String id = StringUtils.hasText(camera.getId()) ? camera.getId().trim() : "camera_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         String name = StringUtils.hasText(camera.getName()) ? camera.getName().trim() : id;

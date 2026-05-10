@@ -43,7 +43,7 @@ if not logger.handlers:
 logger.propagate = False
 
 
-MAX_WORKERS = 8
+MAX_WORKERS = max(1, int(os.environ.get("EEG_MAX_WORKERS", "32")))
 DEFAULT_WORKER_ID = 1
 DEFAULT_PORT = ""
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -782,6 +782,7 @@ class EEGWorker(threading.Thread):
         self.total_raw_count = 0
         self.total_eeg_power_count = 0
         self.total_sse_payload_count = 0
+        self.error_count = 0
         self.subscribers = set()
         self.subscribers_lock = threading.Lock()
         self.status_lock = threading.Lock()
@@ -818,6 +819,11 @@ class EEGWorker(threading.Thread):
             "message": current_error,
             "last_payload_at": last_payload_at,
             "subscriber_count": self._subscriber_count(),
+            "raw_count": self.total_raw_count,
+            "eeg_power_count": self.total_eeg_power_count,
+            "payload_count": self.total_sse_payload_count,
+            "error_count": self.error_count,
+            "started_at": self.started_at,
             "baseline_reset_reason": self.analyzer.baseline_reset_reason,
             "baseline_reset_at": self.analyzer.baseline_reset_at,
             "baseline_ready": self.analyzer.is_baseline_ready(),
@@ -885,6 +891,7 @@ class EEGWorker(threading.Thread):
 
                 time.sleep(0.01)
         except Exception as exc:
+            self.error_count += 1
             self._set_status("error", exc)
             self._publish(self.status_payload(status="error", error=exc))
             logger.exception("worker crashed | worker=%s port=%s error=%s", self.worker_id, self.port_str, exc)
@@ -1119,6 +1126,8 @@ def health():
         "status": "ok",
         "default_worker_id": DEFAULT_WORKER_ID,
         "default_port": DEFAULT_PORT,
+        "max_workers": MAX_WORKERS,
+        "active_workers": len(worker_status),
         "available_workers": list(port_mapping.keys()),
         "workers": worker_status,
     }
