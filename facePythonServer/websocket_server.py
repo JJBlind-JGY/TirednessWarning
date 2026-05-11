@@ -32,6 +32,116 @@ def resolve_local_path(path):
     return os.path.join(BASE_DIR, path)
 
 
+# === MediaPipe FaceLandmarker 替换 open-closed-eye.onnx 的闭眼检测 ====================
+# 设计目标: 改动最小且可回退。
+# - 不修改 face_emotion_model.YuNetEmotiEffRecognizer 的源码
+# - 仅在 main 里运行时把 recognizer._predict_eye_state 替换成 MediaPipe 版本
+# - 替换函数返回的 dict 与原方法接口完全兼容（status/closed/closed_score/open_score/boxes）
+# - 加载失败 / 模型缺失 / mediapipe 没装时自动 fallback 到原 ONNX 模型
+import cv2  # face_emotion_model 已经依赖 cv2，显式 import 让本文件自包含
+
+DEFAULT_MP_MODEL = os.path.join(BASE_DIR, "models", "face_landmarker.task")
+
+
+def _load_mediapipe_landmarker(model_path):
+    """加载 MediaPipe FaceLandmarker (with blendshapes)。失败抛异常。"""
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
+
+    options = mp_vision.FaceLandmarkerOptions(
+        base_options=mp_python.BaseOptions(model_asset_path=model_path),
+        output_face_blendshapes=True,
+        output_facial_transformation_matrixes=False,
+        num_faces=1,
+    )
+    landmarker = mp_vision.FaceLandmarker.create_from_options(options)
+    return landmarker, mp
+
+
+def _make_mediapipe_eye_state_fn(landmarker, mp_module, blink_threshold=0.50):
+    """返回一个 (image, face_box, landmarks) -> dict 的函数，
+    格式与 face_emotion_model.YuNetEmotiEffRecognizer._predict_eye_state 完全兼容。
+
+    面向多线程 ThreadPoolExecutor: MediaPipe FaceLandmarker.detect 不保证线程安全，
+    所以加锁串行化（与原 recognizer 内部锁策略一致）。"""
+    BLINK_LEFT = "eyeBlinkLeft"
+    BLINK_RIGHT = "eyeBlinkRight"
+    lock = threading.Lock()
+
+    def predict_eye(image, face_box, landmarks):
+        # face_box / landmarks 由 YuNet 给出，但 MediaPipe 自己在全图上跑，不依赖它们
+        try:
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            mp_img = mp_module.Image(image_format=mp_module.ImageFormat.SRGB, data=rgb)
+            with lock:
+                res = landmarker.detect(mp_img)
+        except Exception as exc:
+            print(f"[MP EYE ERROR] {exc}")
+            return {"status": "invalid_eye", "closed": None,
+                    "closed_score": 0.0, "open_score": 0.0, "boxes": []}
+
+        if not res.face_blendshapes:
+            return {"status": "invalid_eye", "closed": None,
+                    "closed_score": 0.0, "open_score": 0.0, "boxes": []}
+
+        scores = {b.category_name: b.score for b in res.face_blendshapes[0]}
+        bl = float(scores.get(BLINK_LEFT, 0.0))
+        br = float(scores.get(BLINK_RIGHT, 0.0))
+        avg = (bl + br) / 2.0
+        closed = avg >= blink_threshold
+
+        # 估算两只眼睛的 bbox 给前端画框 / 兼容下游 _draw_eye_result(boxes[0] 索引)
+        # 优先用 YuNet landmarks (前 2 个是左右眼中心)，否则用 face_box 估算
+        eye_boxes = []
+        if landmarks and len(landmarks) >= 2:
+            side = 18
+            for i in range(2):
+                cx, cy = int(landmarks[i][0]), int(landmarks[i][1])
+                eye_boxes.append([cx - side, cy - side, cx + side, cy + side])
+        elif face_box and len(face_box) >= 4:
+            x1, y1, x2, y2 = face_box
+            fw = max(1, x2 - x1)
+            fh = max(1, y2 - y1)
+            ec = int(y1 + fh * 0.38)
+            side = max(12, int(min(fw * 0.13, fh * 0.11)))
+            for cx_ratio in (0.35, 0.65):
+                cx = int(x1 + fw * cx_ratio)
+                eye_boxes.append([cx - side, ec - side, cx + side, ec + side])
+
+        return {
+            "status": "closed" if closed else "open",
+            "closed": bool(closed),
+            "closed_score": float(avg),
+            "open_score": float(max(0.0, 1.0 - avg)),
+            "boxes": eye_boxes,
+        }
+
+    return predict_eye
+
+
+def _patch_recognizer_with_mediapipe(recognizer, model_path, blink_threshold):
+    """把 recognizer._predict_eye_state 换成 MediaPipe 实现。成功返回 True。"""
+    if not os.path.exists(model_path):
+        print(f"[INFO] MediaPipe model not found ({model_path}); using original ONNX eye model.")
+        return False
+    try:
+        landmarker, mp_module = _load_mediapipe_landmarker(model_path)
+    except ImportError as exc:
+        print(f"[WARN] mediapipe package not installed ({exc}); using original ONNX eye model.")
+        return False
+    except Exception as exc:
+        print(f"[WARN] MediaPipe load failed ({exc}); using original ONNX eye model.")
+        return False
+
+    recognizer._predict_eye_state = _make_mediapipe_eye_state_fn(
+        landmarker, mp_module, blink_threshold=blink_threshold
+    )
+    print(f"[INFO] MediaPipe FaceLandmarker enabled for eye detection: {model_path}")
+    print(f"[INFO]   blink_threshold = {blink_threshold}")
+    return True
+
+
 class ModelPool:
     def __init__(self, max_instances):
         self.pool = Queue(max_instances)
@@ -448,6 +558,14 @@ if __name__ == "__main__":
         face_score_threshold=float(config.get('face_score_threshold', 0.7)),
         eye_closed_threshold=float(config.get('eye_closed_threshold', 0.65)),
     )
+
+    # === 接入 MediaPipe 替换闭眼检测（失败 fallback 到原 ONNX）===
+    if config.get('use_mediapipe_eye', True):
+        _mp_model_path = resolve_local_path(config.get('mediapipe_eye_model', DEFAULT_MP_MODEL))
+        _mp_blink_threshold = float(config.get('mp_blink_threshold', 0.50))
+        _patch_recognizer_with_mediapipe(recognizer, _mp_model_path, _mp_blink_threshold)
+    else:
+        print("[INFO] use_mediapipe_eye=false; using original ONNX eye model.")
     # 创建一个线程池执行器
     # executor = ThreadPoolExecutor(max_workers=10)
     #

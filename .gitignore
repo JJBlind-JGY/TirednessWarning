@@ -48,3 +48,10 @@ facePythonServer/face_recognition_repo/results/
 ### model.pt is a large file that contains the trained model weights. It is not necessary to include it in version control, as it can be generated from the training process. Additionally, it may contain sensitive information or be too large for efficient storage in a Git repository. Therefore, it is best to exclude it from version control by adding it to the .gitignore file.
 facePythonServer/model.pt
 facePythonServer/face_recognition_repo/face_recognition_models/
+
+# ========================
+# Local test / scratch scripts (for wanglele local test)
+# ========================
+**/local_test_*.py
+**/local_test_*.ipynb
+**/local_test_snapshots/

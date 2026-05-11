@@ -187,7 +187,10 @@ public class FaceDetectService {
         grabber.setOption("max_delay", "500000");
         grabber.setOption("probesize", "32768");
         grabber.setOption("analyzeduration", "0");
-        grabber.setOption("stimeout", "5000000");
+        // RTSP/socket 超时: 不同 FFmpeg 版本命名不一，多塞几个兼容名，目的是卡死时能 5s 超时返回让上层自动重连
+        grabber.setOption("stimeout", "5000000");   // FFmpeg <=5.0 RTSP demuxer private option
+        grabber.setOption("rw_timeout", "5000000"); // FFmpeg 5.1+ generic IO option
+        grabber.setOption("timeout", "5000000");    // 部分版本的 fallback
         grabber.setOption("buffer_size", "1048576");
         grabber.setVideoOption("autorotate", "1");
     }
