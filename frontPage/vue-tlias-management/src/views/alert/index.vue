@@ -150,7 +150,7 @@ function adviceText(binding) { if (!binding.lastValidEegAt && !binding.lastValid
 .alert-board { padding: 20px 24px; border: 2px solid #f59e0b; background: linear-gradient(180deg, #fff7ed 0%, #fff 100%); box-shadow: 0 18px 44px rgba(180,83,9,.16); }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; color: #7c2d12; }
 .section-head span { padding: 4px 10px; border-radius: 999px; background: #fed7aa; color: #9a3412; font-size: 13px; font-weight: 700; }
-.alert-list { display: grid; gap: 12px; max-height: 300px; overflow-y: auto; padding-right: 8px; overscroll-behavior: contain; }
+.alert-list { display: grid; gap: 12px; max-height: min(720px, 62vh); overflow-y: auto; padding-right: 8px; overscroll-behavior: contain; }
 .alert-row { display: grid; grid-template-columns: 1fr 1.6fr 180px; gap: 14px; align-items: center; padding: 16px 18px; border-radius: 8px; border-left: 6px solid #f59e0b; background: #fffbeb; box-shadow: 0 8px 18px rgba(146,64,14,.08); }
 .alert-row.warning { border-left-color: #dc2626; background: #fef2f2; }
 .alert-main span, .alert-row time { color: #64748b; }

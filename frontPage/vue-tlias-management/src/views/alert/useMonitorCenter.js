@@ -10,6 +10,7 @@ const BINDINGS_STORAGE_KEY = 'alert-bindings'
 const FACE_SERVICE_BASE = '/face-api/faceDetectService'
 const GO2RTC_BASE_URL = import.meta.env.VITE_GO2RTC_BASE_URL || 'http://127.0.0.1:1984'
 const MAX_MONITOR_BINDINGS = Number(import.meta.env.VITE_MAX_MONITOR_BINDINGS || 24)
+const ALERT_LOG_DATE_CHECK_MS = 30000
 const VALID_EEG_HOLD_MS = 10000
 const VALID_FACE_HOLD_MS = 8000
 const ABNORMAL_POPUP_COOLDOWN_MS = 90000
@@ -32,6 +33,7 @@ const EYE_MAIN_CONTINUOUS_MS = 12000
 const EYE_MAIN_ALERT_COOLDOWN_MS = 60000
 const EYE_MAX_SAMPLE_GAP_MS = 3500
 let fusionRefreshTimer = null
+let alertLogDateTimer = null
 
 const EMOTION_ZH = {
   normal: '正常',
@@ -65,7 +67,7 @@ const VALID_EMOTIONS = ['normal', ...ABNORMAL_EMOTIONS]
 const DEVICE_OPTIONS = reactive([])
 const CAMERA_OPTIONS = reactive([])
 
-const state = reactive({ initialized: false, bindings: [], personnelOptions: [], alertHistory: [] })
+const state = reactive({ initialized: false, bindings: [], personnelOptions: [], alertHistory: [], alertHistoryDate: '' })
 
 function readLocalList(storageKey, fallback = []) {
   try {
@@ -247,16 +249,105 @@ function getWarningTextDisplay(binding) {
   return EMOTION_WARNING_TEXT[binding.emotion] || EMOTION_WARNING_TEXT.normal
 }
 
-function pushAlertHistory(binding, level, message = getWarningText(binding)) {
-  state.alertHistory.unshift({
-    id: `${binding.id}-${Date.now()}`,
-    personName: binding.personName || 'æœªç»‘å®šäººå‘˜',
+function getLocalDateKey(value = Date.now()) {
+  const date = new Date(value)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatAlertTime(value) {
+  const date = value ? new Date(value) : new Date()
+  if (Number.isNaN(date.getTime())) return '--:--:--'
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function normalizeAlertLog(item = {}) {
+  const timestamp = Number(item.timestamp || Date.now())
+  return {
+    id: String(item.id || `alert-${timestamp}-${Math.random().toString(36).slice(2, 8)}`),
+    date: item.date || getLocalDateKey(timestamp),
+    timestamp,
+    personName: item.personName || '未绑定人员',
+    personId: item.personId || '',
+    device: item.device || '未配置设备',
+    level: item.level || 'warning',
+    type: item.type || 'abnormal_start',
+    time: item.time || formatAlertTime(timestamp),
+    message: item.message || ''
+  }
+}
+
+function sortAlertHistory() {
+  state.alertHistory.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))
+}
+
+async function loadAlertHistory(date = getLocalDateKey()) {
+  try {
+    const endpoint = date === getLocalDateKey()
+      ? `${FACE_SERVICE_BASE}/alert-logs/today`
+      : `${FACE_SERVICE_BASE}/alert-logs?date=${encodeURIComponent(date)}`
+    const response = await fetch(endpoint)
+    if (!response.ok) throw new Error(`alert log load failed: ${response.status}`)
+    const payload = await response.json()
+    const logs = Array.isArray(payload?.data) ? payload.data.map(normalizeAlertLog) : []
+    state.alertHistoryDate = date
+    state.alertHistory.splice(0, state.alertHistory.length, ...logs)
+    sortAlertHistory()
+  } catch (error) {
+    console.warn('Failed to load alert logs', error)
+    state.alertHistoryDate = date
+  }
+}
+
+function ensureTodayAlertHistory({ reload = true } = {}) {
+  const today = getLocalDateKey()
+  if (state.alertHistoryDate === today) return
+  state.alertHistoryDate = today
+  state.alertHistory.splice(0, state.alertHistory.length)
+  if (reload) void loadAlertHistory(today)
+}
+
+async function persistAlertHistoryItem(item) {
+  try {
+    const response = await fetch(`${FACE_SERVICE_BASE}/alert-logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: item.id,
+        date: item.date,
+        timestamp: item.timestamp,
+        personName: item.personName,
+        personId: item.personId,
+        device: item.device,
+        level: item.level,
+        type: item.type,
+        message: item.message
+      })
+    })
+    if (!response.ok) throw new Error(`alert log save failed: ${response.status}`)
+  } catch (error) {
+    console.warn('Failed to persist alert log', error)
+  }
+}
+
+function pushAlertHistory(binding, level, message = getWarningText(binding), type = 'abnormal_start') {
+  ensureTodayAlertHistory({ reload: false })
+  const timestamp = Date.now()
+  const item = normalizeAlertLog({
+    id: `${binding.id}-${timestamp}-${type}`,
+    date: getLocalDateKey(timestamp),
+    timestamp,
+    personName: binding.personName || '未绑定人员',
+    personId: binding.personId || '',
     device: getDeviceLabel(binding.workerId),
     level,
-    time: new Date().toLocaleString('zh-CN', { hour12: false }),
+    type,
     message
   })
-  if (state.alertHistory.length > 12) state.alertHistory.length = 12
+  state.alertHistory.unshift(item)
+  void persistAlertHistoryItem(item)
 }
 
 function parsePercent(value) {
@@ -369,7 +460,7 @@ function maybeTriggerEyeAlerts(binding, now = Date.now()) {
   binding.eyeLastAlertAt = now
   const personName = binding.personName || EYE_TEXT.currentPerson
   const message = `\u68c0\u6d4b\u5230 ${personName} \u8fde\u7eed\u95ed\u773c\u8d85\u8fc712\u79d2\uff0c\u8bf7\u6ce8\u610f\u5f53\u524d\u72b6\u6001`
-  pushAlertHistory(binding, 'warning', message)
+  pushAlertHistory(binding, 'warning', message, 'eye_closed_danger')
   ElNotification({ title: EYE_TEXT.mainTitle, message, type: 'error', duration: 5000, showClose: true, position: 'top-right', customClass: 'strong-alert-notification danger' })
 }
 
@@ -622,7 +713,7 @@ function maybeShowAbnormalNotification(binding) {
   binding.popupWarningActive = true
   binding.popupWarningEmotion = binding.emotion
   binding.lastAlertHistoryAt = now
-  pushAlertHistory(binding, 'warning')
+  pushAlertHistory(binding, 'warning', getWarningText(binding), 'abnormal_start')
   ElNotification({ title: '状态提醒', message: `${binding.personName || '当前人员'} 检测为${binding.emotionZh}，请关注当前状态。`, type: 'warning', duration: 7000, showClose: true, position: 'top-right', customClass: 'strong-alert-notification' })
 }
 
@@ -677,7 +768,7 @@ function evaluateWarning(binding) {
   const level = getWarningLevel(binding)
   if (!hasPrediction(binding)) return
   if (shouldRecordAlertHistory(binding, level)) {
-    pushAlertHistory(binding, level)
+    pushAlertHistory(binding, level, getWarningText(binding), binding.emotion === 'normal' ? 'recovered' : 'abnormal_start')
   }
   binding.latestWarningLevel = level
   binding.latestEmotion = binding.emotion
@@ -696,7 +787,7 @@ function syncBindingsWithCameras() { const fallbackCameraId = getDefaultCameraId
 
 async function initMonitorCenter() {
   if (state.initialized) return
-  await Promise.all([loadPersonnel(), loadDevices(), loadCameras()])
+  await Promise.all([loadPersonnel(), loadDevices(), loadCameras(), loadAlertHistory()])
   loadBindings(); syncBindingsWithDevices(); syncBindingsWithCameras(); faceMonitor.ensureFaceConnection(); state.bindings.forEach((binding) => faceMonitor.subscribeFace(binding)); eegMonitor.ensureAllAutoEeg(); state.initialized = true
 }
 
@@ -728,9 +819,14 @@ function formatIndex(value) { return Number(value || 0).toFixed(1) }
 function refreshFaceSubscription(bindingId) { faceMonitor.refreshFaceSubscription(bindingId) }
 function updateBindingDevice(binding) { if (!binding) return; clearHistorySamples(binding, 'eeg'); eegMonitor.stopEeg(binding.id, 'restart'); persistBindings(); eegMonitor.ensureAutoEeg(binding) }
 function updateBindingCamera(binding) { if (!binding) return; clearHistorySamples(binding, 'face'); faceMonitor.refreshFaceSubscription(binding.id); persistBindings() }
+function startAlertLogDateWatcher() {
+  ensureTodayAlertHistory()
+  if (!alertLogDateTimer) alertLogDateTimer = window.setInterval(ensureTodayAlertHistory, ALERT_LOG_DATE_CHECK_MS)
+}
 function useMonitorCenterPage() {
   onMounted(async () => {
     await initMonitorCenter()
+    startAlertLogDateWatcher()
     await nextTick()
     eegMonitor.ensureCharts(state.bindings)
     if (!fusionRefreshTimer) fusionRefreshTimer = window.setInterval(refreshFusionStates, 1000)

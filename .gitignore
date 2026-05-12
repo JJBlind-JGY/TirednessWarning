@@ -2,6 +2,7 @@
 # Runtime & Config
 # ========================
 faceJavaServer/config/
+logs/
 *.log
 
 # ========================

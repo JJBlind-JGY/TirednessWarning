@@ -1,9 +1,11 @@
 package com.server.faceservice.controller;
 
 import com.server.common.utils.R;
+import com.server.faceservice.config.AlertLog;
 import com.server.faceservice.config.CameraConfig;
 import com.server.faceservice.config.PersonnelConfig;
 import com.server.faceservice.config.VideoStreamAutoRunner;
+import com.server.faceservice.service.AlertLogService;
 import com.server.faceservice.service.CameraConfigService;
 import com.server.faceservice.service.FaceDetectService;
 import com.server.faceservice.service.PersonnelConfigService;
@@ -36,6 +38,9 @@ public class FaceDetectController {
 
     @Autowired
     private PersonnelConfigService personnelConfigService;
+
+    @Autowired
+    private AlertLogService alertLogService;
 
     @Autowired
     private VideoStreamAutoRunner videoStreamAutoRunner;
@@ -133,5 +138,28 @@ public class FaceDetectController {
     public R removePersonnel(@PathVariable String personnelId) {
         boolean removed = personnelConfigService.remove(personnelId);
         return removed ? R.ok() : R.fail("Personnel not found");
+    }
+
+    @GetMapping("/alert-logs/today")
+    public R listTodayAlertLogs() {
+        return R.ok(Map.of("data", alertLogService.listToday()));
+    }
+
+    @GetMapping("/alert-logs")
+    public R listAlertLogs(@RequestParam String date) {
+        try {
+            return R.ok(Map.of("data", alertLogService.list(date)));
+        } catch (IllegalArgumentException e) {
+            return R.fail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/alert-logs")
+    public R appendAlertLog(@RequestBody AlertLog alertLog) {
+        try {
+            return R.ok(Map.of("data", alertLogService.append(alertLog)));
+        } catch (IllegalArgumentException e) {
+            return R.fail(e.getMessage());
+        }
     }
 }
