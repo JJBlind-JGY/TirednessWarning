@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.server.faceservice.utils.ModelWebsocket;
 import com.server.faceservice.utils.SafeWebSocketSender;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
@@ -31,6 +32,7 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class FaceDetectService {
     private static final int FRAME_PROCESSING_THREADS = Math.max(4, Runtime.getRuntime().availableProcessors());
+    private static final int EXPORT_FRAME_THREADS = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, CameraSamplingState> cameraStates = new ConcurrentHashMap<>();
@@ -40,6 +42,9 @@ public class FaceDetectService {
 
     @Autowired
     private SimpMessagingTemplate messagingTemplate;
+
+    @Autowired
+    private AbnormalSampleService abnormalSampleService;
 
     @Value("${websocket.webUser.url:/topic/face_fatigue/}")
     private String faceFatigueUrl;
@@ -56,11 +61,25 @@ public class FaceDetectService {
             new ArrayBlockingQueue<>(FRAME_PROCESSING_THREADS * 4),
             new ThreadPoolExecutor.DiscardOldestPolicy()
     );
+    private final ThreadPoolExecutor exportFrameExecutor = new ThreadPoolExecutor(
+            EXPORT_FRAME_THREADS,
+            EXPORT_FRAME_THREADS,
+            30L,
+            TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(EXPORT_FRAME_THREADS * 8),
+            new ThreadPoolExecutor.DiscardOldestPolicy()
+    );
 
     @PostConstruct
     public void init() {
         avutil.av_log_set_level(avutil.AV_LOG_ERROR);
         sender = new SafeWebSocketSender(modelWebsocket);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        frameProcessingExecutor.shutdownNow();
+        exportFrameExecutor.shutdownNow();
     }
 
     public boolean isConnected() {
@@ -148,13 +167,40 @@ public class FaceDetectService {
                 }
 
                 long now = System.currentTimeMillis();
-                if (!shouldSample(userId, now)) {
+                boolean shouldRecordExportFrame = abnormalSampleService.shouldRecordVideoFrame(userId, now);
+                boolean shouldSendModelFrame = shouldSample(userId, now);
+                if (!shouldRecordExportFrame && !shouldSendModelFrame) {
+                    continue;
+                }
+
+                if (shouldRecordExportFrame) {
+                    final Frame exportFrame = frame.clone();
+                    final long exportTimestamp = now;
+                    exportFrameExecutor.submit(() -> {
+                        CameraSamplingState state = stateFor(userId);
+                        if (state.generation.get() != generation) {
+                            state.staleTasksDropped.incrementAndGet();
+                            return;
+                        }
+                        try {
+                            byte[] imageBytes = convertFrameToJpeg(exportFrame);
+                            if (state.generation.get() == generation) {
+                                abnormalSampleService.recordVideoFrame(userId, exportTimestamp, imageBytes);
+                            } else {
+                                state.staleTasksDropped.incrementAndGet();
+                            }
+                        } catch (IOException ignored) {
+                        }
+                    });
+                }
+
+                if (!shouldSendModelFrame) {
                     continue;
                 }
 
                 stateFor(userId).framesCaptured.incrementAndGet();
                 stateFor(userId).lastCapturedAt.set(now);
-                final Frame finalFrame = frame.clone();
+                final Frame modelFrame = frame.clone();
                 frameProcessingExecutor.submit(() -> {
                     CameraSamplingState state = stateFor(userId);
                     if (state.generation.get() != generation) {
@@ -162,7 +208,7 @@ public class FaceDetectService {
                         return;
                     }
                     try {
-                        byte[] imageBytes = convertFrameToJpeg(finalFrame);
+                        byte[] imageBytes = convertFrameToJpeg(modelFrame);
                         if (state.generation.get() == generation) {
                             sendFrame(imageBytes, userId);
                         } else {

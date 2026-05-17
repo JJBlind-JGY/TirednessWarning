@@ -67,6 +67,8 @@ WEAK_CONTACT_SIGNAL_VALUES = {29, 54, 55, 56, 80, 81, 82}
 BAD_CONTACT_SIGNAL_VALUES = STRONG_BAD_CONTACT_SIGNAL_VALUES | WEAK_CONTACT_SIGNAL_VALUES
 BLOCKING_SIGNAL_VALUES = STRONG_BAD_CONTACT_SIGNAL_VALUES | {NO_CONTACT_SIGNAL_VALUE}
 BASELINE_MAX_SAMPLES = 180
+SNAPSHOT_CACHE_SEC = 30
+RAW_TGAM_CACHE_SEC = SNAPSHOT_CACHE_SEC + 5
 
 PARSER_SYNC = 0xAA
 PARSER_EXCODE = 0x55
@@ -771,6 +773,9 @@ class EEGWorker(threading.Thread):
         self.analyzer = EEGAnalyzer(baseline_sec=BASELINE_SEC, baseline_reset_reason=baseline_reset_reason)
         self.raw_buffer = deque(maxlen=WINDOW_SIZE)
         self.raw_since_last = []
+        self.raw_tgam_history = deque(maxlen=RAW_FS * RAW_TGAM_CACHE_SEC)
+        self.snapshot_history = deque(maxlen=SNAPSHOT_CACHE_SEC * 2)
+        self.snapshot_lock = threading.Lock()
         self.last_signal_quality = 0
         self.last_attention = None
         self.last_meditation = None
@@ -858,6 +863,7 @@ class EEGWorker(threading.Thread):
                         raw_value = event["value"]
                         self.raw_buffer.append(raw_value)
                         self.raw_since_last.append(raw_value)
+                        self._remember_raw_tgam(raw_value)
                         self.total_raw_count += 1
                     elif event_type == "signal":
                         self.last_signal_quality = event["value"]
@@ -883,9 +889,11 @@ class EEGWorker(threading.Thread):
                     result["raw_wave"] = self._get_raw_wave_chunk()
                     result["wave_fs"] = TARGET_FS
                     result["analysis_time"] = datetime.utcnow().isoformat() + "Z"
+                    result["analysis_ts"] = int(time.time() * 1000)
                     self.last_payload_at = result["analysis_time"]
                     self._set_status("online")
                     self.total_sse_payload_count += 1
+                    self._remember_snapshot(result)
                     self._debug_log_payload(result)
                     self._publish(result)
 
@@ -941,6 +949,53 @@ class EEGWorker(threading.Thread):
                     subscriber_queue.put(result, block=False)
                 except queue.Full:
                     pass
+
+    def _remember_snapshot(self, result):
+        snapshot = json.loads(json.dumps(result, ensure_ascii=False))
+        with self.snapshot_lock:
+            self.snapshot_history.append(snapshot)
+
+    def _remember_raw_tgam(self, raw_value):
+        sample = {"ts": int(time.time() * 1000), "value": int(raw_value)}
+        with self.snapshot_lock:
+            self.raw_tgam_history.append(sample)
+
+    def snapshot(self, seconds=10, before_ms=None):
+        before_ms = int(before_ms or time.time() * 1000)
+        seconds = max(1, min(int(seconds or 10), SNAPSHOT_CACHE_SEC))
+        window_start = before_ms - seconds * 1000
+        with self.snapshot_lock:
+            payloads = [
+                item for item in self.snapshot_history
+                if window_start <= int(item.get("analysis_ts") or 0) <= before_ms
+            ]
+            raw_tgam_samples = [
+                item for item in self.raw_tgam_history
+                if window_start <= int(item.get("ts") or 0) <= before_ms
+            ]
+        raw_wave = []
+        predictions = []
+        for item in payloads:
+            raw_wave.extend(item.get("raw_wave") or [])
+            prediction = dict(item)
+            prediction.pop("raw_wave", None)
+            predictions.append(prediction)
+        raw_tgam_values = [item["value"] for item in raw_tgam_samples]
+        return {
+            "workerId": self.worker_id,
+            "windowStart": window_start,
+            "windowEnd": before_ms,
+            "waveFs": TARGET_FS,
+            "rawWave": raw_wave,
+            "rawTgamFs": RAW_FS,
+            "rawTgamSamples": raw_tgam_values,
+            "rawTgamCount": len(raw_tgam_values),
+            "rawTgamWindowStart": raw_tgam_samples[0]["ts"] if raw_tgam_samples else 0,
+            "rawTgamWindowEnd": raw_tgam_samples[-1]["ts"] if raw_tgam_samples else 0,
+            "predictions": predictions,
+            "predictionCount": len(predictions),
+            "partial": len(predictions) == 0 or len(raw_tgam_values) < int(seconds * RAW_FS * 0.8),
+        }
 
     def _get_raw_wave_chunk(self):
         if self.raw_since_last:
@@ -1131,6 +1186,29 @@ def health():
         "available_workers": list(port_mapping.keys()),
         "workers": worker_status,
     }
+
+
+@app.get("/eeg/snapshot")
+def eeg_snapshot():
+    worker_id = request.args.get("workerId", default=DEFAULT_WORKER_ID, type=int)
+    seconds = request.args.get("seconds", default=10, type=int)
+    before = request.args.get("before", default=0, type=int)
+    with workers_lock:
+        worker = workers.get(worker_id)
+    if worker is None:
+        window_end = int(before or time.time() * 1000)
+        return {
+            "workerId": worker_id,
+            "windowStart": max(0, window_end - max(1, seconds) * 1000),
+            "windowEnd": window_end,
+            "waveFs": TARGET_FS,
+            "rawWave": [],
+            "predictions": [],
+            "predictionCount": 0,
+            "partial": True,
+            "message": "worker not running",
+        }
+    return worker.snapshot(seconds=seconds, before_ms=before)
 
 
 @app.get("/eeg/devices")

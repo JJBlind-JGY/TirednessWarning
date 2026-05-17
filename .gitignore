@@ -3,6 +3,7 @@
 # ========================
 faceJavaServer/config/
 logs/
+data/
 *.log
 
 # ========================

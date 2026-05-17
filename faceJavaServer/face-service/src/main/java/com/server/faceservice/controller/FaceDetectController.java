@@ -1,10 +1,12 @@
 package com.server.faceservice.controller;
 
 import com.server.common.utils.R;
+import com.server.faceservice.config.AbnormalSampleRequest;
 import com.server.faceservice.config.AlertLog;
 import com.server.faceservice.config.CameraConfig;
 import com.server.faceservice.config.PersonnelConfig;
 import com.server.faceservice.config.VideoStreamAutoRunner;
+import com.server.faceservice.service.AbnormalSampleService;
 import com.server.faceservice.service.AlertLogService;
 import com.server.faceservice.service.CameraConfigService;
 import com.server.faceservice.service.FaceDetectService;
@@ -41,6 +43,9 @@ public class FaceDetectController {
 
     @Autowired
     private AlertLogService alertLogService;
+
+    @Autowired
+    private AbnormalSampleService abnormalSampleService;
 
     @Autowired
     private VideoStreamAutoRunner videoStreamAutoRunner;
@@ -161,5 +166,10 @@ public class FaceDetectController {
         } catch (IllegalArgumentException e) {
             return R.fail(e.getMessage());
         }
+    }
+
+    @PostMapping("/abnormal-samples")
+    public R captureAbnormalSample(@RequestBody AbnormalSampleRequest request) {
+        return R.ok(Map.of("data", abnormalSampleService.capture(request)));
     }
 }

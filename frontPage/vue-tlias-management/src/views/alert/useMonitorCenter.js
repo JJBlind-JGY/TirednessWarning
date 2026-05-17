@@ -11,6 +11,8 @@ const FACE_SERVICE_BASE = '/face-api/faceDetectService'
 const GO2RTC_BASE_URL = import.meta.env.VITE_GO2RTC_BASE_URL || 'http://127.0.0.1:1984'
 const MAX_MONITOR_BINDINGS = Number(import.meta.env.VITE_MAX_MONITOR_BINDINGS || 24)
 const ALERT_LOG_DATE_CHECK_MS = 30000
+const FACE_ABNORMAL_SAMPLE_HOLD_MS = 6000
+const ABNORMAL_SAMPLE_COOLDOWN_MS = 120000
 const VALID_EEG_HOLD_MS = 10000
 const VALID_FACE_HOLD_MS = 8000
 const ABNORMAL_POPUP_COOLDOWN_MS = 90000
@@ -180,7 +182,9 @@ function createBinding(seed = 1) {
     eyeDetailPopupActive: false, eyeDetailPopupWindowId: 0, eyeDetailPopupAt: 0, eyePopupLevel: '', eyePopupDismissedAt: 0,
     eyeOpenStartedAt: 0, eyeContinuousOpenMs: 0, eyeMainAlertActive: false, eyeMainAlertWindowId: 0, eyeLastAlertAt: 0, eyeClosedAlertStage: '',
     videoUploading: false, uploadPercent: 0, localVideoUrl: '', videoWidth: 0, videoHeight: 0,
-    fatigueStreak: 0, abnormalPopupCandidate: '', abnormalPopupStreak: 0, alertHistoryStreak: 0, lastPopupAt: 0, lastAlertHistoryAt: 0, hasPopupWarning: false, popupWarningActive: false, popupWarningEmotion: '', latestWarningLevel: 'info', latestEmotion: 'normal', faceSubscription: null
+    fatigueStreak: 0, abnormalPopupCandidate: '', abnormalPopupStreak: 0, alertHistoryStreak: 0, lastPopupAt: 0, lastAlertHistoryAt: 0,
+    faceAbnormalStartedAt: 0, lastAbnormalSampleAt: 0, lastAbnormalSampleStatus: '',
+    hasPopupWarning: false, popupWarningActive: false, popupWarningEmotion: '', latestWarningLevel: 'info', latestEmotion: 'normal', faceSubscription: null
   })
 }
 
@@ -348,6 +352,48 @@ function pushAlertHistory(binding, level, message = getWarningText(binding), typ
   })
   state.alertHistory.unshift(item)
   void persistAlertHistoryItem(item)
+}
+
+async function captureAbnormalSample(binding, payload = {}) {
+  const timestamp = Date.now()
+  try {
+    const response = await fetch(`${FACE_SERVICE_BASE}/abnormal-samples`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        eventId: `${binding.id}-${timestamp}-face-abnormal`,
+        timestamp,
+        personId: binding.personId || '',
+        personName: binding.personName || '未绑定人员',
+        workerId: binding.workerId,
+        cameraId: binding.faceChannelId || payload.userId || '',
+        alertType: 'face_abnormal',
+        emotion: payload.emotion5 || binding.faceEmotionKey || '',
+        message: `${binding.personName || '当前人员'} 面部状态持续异常`
+      })
+    })
+    if (!response.ok) throw new Error(`abnormal sample capture failed: ${response.status}`)
+    const result = await response.json()
+    binding.lastAbnormalSampleStatus = result?.data?.captureStatus || 'ok'
+  } catch (error) {
+    binding.lastAbnormalSampleStatus = 'failed'
+    console.warn('Failed to capture abnormal sample', error)
+  }
+}
+
+function maybeTriggerAbnormalSample(binding, payload = {}) {
+  if (!binding) return
+  const emotion = payload.emotion5 || ''
+  const now = Date.now()
+  if (!ABNORMAL_EMOTIONS.includes(emotion)) {
+    binding.faceAbnormalStartedAt = 0
+    return
+  }
+  if (!binding.faceAbnormalStartedAt) binding.faceAbnormalStartedAt = now
+  if (now - Number(binding.faceAbnormalStartedAt || 0) < FACE_ABNORMAL_SAMPLE_HOLD_MS) return
+  if (now - Number(binding.lastAbnormalSampleAt || 0) < ABNORMAL_SAMPLE_COOLDOWN_MS) return
+  binding.lastAbnormalSampleAt = now
+  void captureAbnormalSample(binding, payload)
 }
 
 function parsePercent(value) {
@@ -775,7 +821,7 @@ function evaluateWarning(binding) {
 }
 
 const eegMonitor = createEegMonitor({ state, getBindingById, getDeviceLabel, evaluateWarning, updateFusionState })
-const faceMonitor = createFaceMonitor({ state, getBindingById, updateBindingPerson, evaluateWarning, updateFusionState, updateEyeState })
+const faceMonitor = createFaceMonitor({ state, getBindingById, updateBindingPerson, evaluateWarning, updateFusionState, updateEyeState, maybeTriggerAbnormalSample })
 
 function syncBindingsWithDevices() {
   const fallbackWorkerId = DEVICE_OPTIONS[0]?.value ?? null

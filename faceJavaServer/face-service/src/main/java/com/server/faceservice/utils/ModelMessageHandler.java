@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
+import com.server.faceservice.service.AbnormalSampleService;
 
 @Component
 public class ModelMessageHandler {
@@ -16,10 +17,12 @@ public class ModelMessageHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(ModelMessageHandler.class);
     private final SimpMessagingTemplate messagingTemplate;
+    private final AbnormalSampleService abnormalSampleService;
 
     @Autowired
-    ModelMessageHandler(SimpMessagingTemplate messagingTemplate) {
+    ModelMessageHandler(SimpMessagingTemplate messagingTemplate, AbnormalSampleService abnormalSampleService) {
         this.messagingTemplate = messagingTemplate;
+        this.abnormalSampleService = abnormalSampleService;
     }
 
     @PostConstruct
@@ -74,6 +77,7 @@ public class ModelMessageHandler {
                 System.currentTimeMillis(),
                 image
         );
+        abnormalSampleService.recordFacePrediction(json);
         messagingTemplate.convertAndSend(faceFatigueUrl + userId, response);
         logger.info("face model result pushed: userId={}, status={}, emotion5={}, emotionCat={}, score={}",
                 userId, status, emotion5, emotionCat, score);

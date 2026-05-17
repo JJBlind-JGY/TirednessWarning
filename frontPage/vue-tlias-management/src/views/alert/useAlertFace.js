@@ -38,7 +38,7 @@ function normalizeScore(value) {
   return Number.isFinite(numeric) ? numeric : 0
 }
 
-export function createFaceMonitor({ state, getBindingById, evaluateWarning, updateFusionState, updateEyeState }) {
+export function createFaceMonitor({ state, getBindingById, evaluateWarning, updateFusionState, updateEyeState, maybeTriggerAbnormalSample }) {
   let stompClient = null
   let stompSocket = null
   let stompConnected = false
@@ -167,6 +167,7 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
     binding.faceAssistStreak = payload.emotion5 === 'normal' ? 0 : Number(binding.faceAssistStreak || 0) + 1
     binding.faceStopRequired = payload.emotion5 !== 'normal'
     updateEyeState?.(binding, payload)
+    maybeTriggerAbnormalSample?.(binding, payload)
     updateFusionState?.(binding)
     evaluateWarning(binding)
   }
