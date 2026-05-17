@@ -5,6 +5,10 @@ faceJavaServer/config/
 logs/
 data/
 *.log
+TirednessWarning-Release/
+TirednessWarning-Release.archived-*/
+TirednessWarning-Release-Full/
+TirednessWarning-Release-Full.archived-*/
 
 # ========================
 # Java
