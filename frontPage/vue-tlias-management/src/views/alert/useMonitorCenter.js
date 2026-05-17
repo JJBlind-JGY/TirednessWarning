@@ -803,8 +803,9 @@ function refreshFusionStates() {
       binding.lastValidFaceScore = 0
       binding.faceAssistStreak = 0
     }
-    summarizeEyeWindow(binding, now)
-    maybeTriggerEyeAlerts(binding, now)
+    // Eye detection alerts are disabled on main; develop keeps this workflow.
+    // summarizeEyeWindow(binding, now)
+    // maybeTriggerEyeAlerts(binding, now)
     updateFusionState(binding)
     if (hadPrediction || hasPrediction(binding)) evaluateWarning(binding)
   })
@@ -821,7 +822,16 @@ function evaluateWarning(binding) {
 }
 
 const eegMonitor = createEegMonitor({ state, getBindingById, getDeviceLabel, evaluateWarning, updateFusionState })
-const faceMonitor = createFaceMonitor({ state, getBindingById, updateBindingPerson, evaluateWarning, updateFusionState, updateEyeState, maybeTriggerAbnormalSample })
+const faceMonitor = createFaceMonitor({
+  state,
+  getBindingById,
+  updateBindingPerson,
+  evaluateWarning,
+  updateFusionState,
+  // Eye detection alerts are disabled on main; develop keeps updateEyeState wired in.
+  // updateEyeState,
+  maybeTriggerAbnormalSample
+})
 
 function syncBindingsWithDevices() {
   const fallbackWorkerId = DEVICE_OPTIONS[0]?.value ?? null

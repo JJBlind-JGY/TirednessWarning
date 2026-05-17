@@ -142,6 +142,12 @@ def _patch_recognizer_with_mediapipe(recognizer, model_path, blink_threshold):
     return True
 
 
+def _disable_eye_state_fn(image, face_box, landmarks):
+    """Eye detection is disabled on main; develop keeps the full eye-alert feature."""
+    return {"status": "disabled", "closed": None,
+            "closed_score": 0.0, "open_score": 0.0, "boxes": []}
+
+
 class ModelPool:
     def __init__(self, max_instances):
         self.pool = Queue(max_instances)
@@ -287,12 +293,14 @@ async def process_tasks():
             "fatigueRank": result.fatigue_rank,
             "faceBox": result.face_box,
             "scores7": result.scores7,
-            "eyeStatus": result.eye_status,
-            "eyeClosed": result.eye_closed,
-            "eyeClosedScore": round(result.eye_closed_score * 100, 3),
-            "eyeOpenScore": round(result.eye_open_score * 100, 3),
-            "eyeBoxes": result.eye_boxes,
-            "eyeCheckedAt": int(time.time() * 1000),
+            # Eye detection fields are intentionally disabled on main.
+            # The develop branch preserves the full eye-closed alert workflow.
+            # "eyeStatus": result.eye_status,
+            # "eyeClosed": result.eye_closed,
+            # "eyeClosedScore": round(result.eye_closed_score * 100, 3),
+            # "eyeOpenScore": round(result.eye_open_score * 100, 3),
+            # "eyeBoxes": result.eye_boxes,
+            # "eyeCheckedAt": int(time.time() * 1000),
             "modelQueuedMs": round(max(0, time.time() - queued_at) * 1000, 3),
             "modelInferenceMs": round(inference_ms, 3),
             "image": image_b64,
@@ -560,12 +568,16 @@ if __name__ == "__main__":
     )
 
     # === 接入 MediaPipe 替换闭眼检测（失败 fallback 到原 ONNX）===
-    if config.get('use_mediapipe_eye', True):
-        _mp_model_path = resolve_local_path(config.get('mediapipe_eye_model', DEFAULT_MP_MODEL))
-        _mp_blink_threshold = float(config.get('mp_blink_threshold', 0.50))
-        _patch_recognizer_with_mediapipe(recognizer, _mp_model_path, _mp_blink_threshold)
-    else:
-        print("[INFO] use_mediapipe_eye=false; using original ONNX eye model.")
+    # Eye detection is disabled on main to keep reports stable.
+    # develop preserves the original MediaPipe/ONNX eye-closed workflow.
+    recognizer._predict_eye_state = _disable_eye_state_fn
+    print("[INFO] eye detection disabled on main; develop keeps the full eye-alert feature.")
+    # if config.get('use_mediapipe_eye', True):
+    #     _mp_model_path = resolve_local_path(config.get('mediapipe_eye_model', DEFAULT_MP_MODEL))
+    #     _mp_blink_threshold = float(config.get('mp_blink_threshold', 0.50))
+    #     _patch_recognizer_with_mediapipe(recognizer, _mp_model_path, _mp_blink_threshold)
+    # else:
+    #     print("[INFO] use_mediapipe_eye=false; using original ONNX eye model.")
     # 创建一个线程池执行器
     # executor = ThreadPoolExecutor(max_workers=10)
     #

@@ -65,6 +65,7 @@ function closeEyePopup() {
 
 <template>
   <div v-if="binding" class="detail-page">
+    <!-- Eye detection popup is disabled on main; develop keeps the full eye-alert workflow.
     <div v-if="binding.eyeDetailPopupActive" class="eye-alert-mask">
       <section class="eye-alert-card" :class="eyePopupLevel">
         <div class="eye-alert-icon">{{ eyePopupDanger ? '!' : 'i' }}</div>
@@ -76,6 +77,7 @@ function closeEyePopup() {
         <button class="eye-alert-close" type="button" @click="closeEyePopup">{{ '\u5173\u95ed' }}</button>
       </section>
     </div>
+    -->
     <section class="top-bar">
       <div>
         <div class="kicker">单设备详情</div>
@@ -134,7 +136,9 @@ function closeEyePopup() {
           <div class="metric-box"><span>视频接入通道</span><strong>{{ getCameraLabel(binding.faceChannelId) }}</strong></div>
           <div class="metric-box"><span>视频更新时间</span><strong>{{ binding.lastValidFaceAt ? formatShortTime(binding.lastValidFaceAt) : '--:--:--' }}</strong></div>
           <div class="metric-box"><span>辅助信号状态</span><strong>{{ getFaceStatusLabel(binding) }}</strong></div>
+          <!-- Eye status display is disabled on main; develop keeps this metric.
           <div class="metric-box"><span>{{ '\u95ed\u773c\u72b6\u6001' }}</span><strong>{{ binding.eyeStatusText || '\u7b49\u5f85\u6709\u6548\u4eba\u8138' }}</strong></div>
+          -->
         </div>
       </article>
 

@@ -50,12 +50,13 @@ public class ModelMessageHandler {
         String fatigueRank = normalizeNumber(json.get("fatigueRank"));
         Object faceBox = json.get("faceBox");
         Object scores7 = json.get("scores7");
-        String eyeStatus = json.getString("eyeStatus");
-        Boolean eyeClosed = json.getBoolean("eyeClosed");
-        String eyeClosedScore = normalizeScore(json.get("eyeClosedScore"));
-        String eyeOpenScore = normalizeScore(json.get("eyeOpenScore"));
-        Object eyeBoxes = json.get("eyeBoxes");
-        Object eyeCheckedAt = json.get("eyeCheckedAt");
+        // Eye detection forwarding is disabled on main; develop keeps the full eye-alert workflow.
+        // String eyeStatus = json.getString("eyeStatus");
+        // Boolean eyeClosed = json.getBoolean("eyeClosed");
+        // String eyeClosedScore = normalizeScore(json.get("eyeClosedScore"));
+        // String eyeOpenScore = normalizeScore(json.get("eyeOpenScore"));
+        // Object eyeBoxes = json.get("eyeBoxes");
+        // Object eyeCheckedAt = json.get("eyeCheckedAt");
         String image = json.getString("image");
 
         WebMessage response = new WebMessage(
@@ -68,12 +69,12 @@ public class ModelMessageHandler {
                 fatigueRank,
                 faceBox,
                 scores7,
-                eyeStatus,
-                eyeClosed,
-                eyeClosedScore,
-                eyeOpenScore,
-                eyeBoxes,
-                eyeCheckedAt,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
                 System.currentTimeMillis(),
                 image
         );

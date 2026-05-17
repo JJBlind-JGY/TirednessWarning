@@ -146,7 +146,8 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
       binding.faceRate = '--'
       binding.faceRank = null
       clearCurrentFacePrediction(binding)
-      updateEyeState?.(binding, payload)
+      // Eye detection alerts are disabled on main; develop keeps this workflow.
+      // updateEyeState?.(binding, payload)
       binding.faceStopRequired = false
       updateFusionState?.(binding)
       evaluateWarning(binding)
@@ -166,7 +167,8 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
     binding.lastValidFaceScore = normalizeScore(payload.score)
     binding.faceAssistStreak = payload.emotion5 === 'normal' ? 0 : Number(binding.faceAssistStreak || 0) + 1
     binding.faceStopRequired = payload.emotion5 !== 'normal'
-    updateEyeState?.(binding, payload)
+    // Eye detection alerts are disabled on main; develop keeps this workflow.
+    // updateEyeState?.(binding, payload)
     maybeTriggerAbnormalSample?.(binding, payload)
     updateFusionState?.(binding)
     evaluateWarning(binding)
