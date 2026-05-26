@@ -52,29 +52,35 @@ public class AbnormalSampleService {
     private final Map<String, ArrayDeque<VideoFrameSample>> videoFrames = new ConcurrentHashMap<>();
     private final Map<String, ArrayDeque<JSONObject>> facePredictions = new ConcurrentHashMap<>();
     private final Path sampleRoot;
+    private final Path normalSampleRoot;
     private final String eegSnapshotBaseUrl;
     private final ZoneId zoneId;
     private final long windowMs;
     private final long videoCacheMs;
     private final int videoFps;
     private final long maxBytes;
+    private final long normalMaxBytes;
 
     public AbnormalSampleService(
             @Value("${app.abnormal-sample.dir:data/abnormal-samples}") String sampleDir,
+            @Value("${app.normal-sample.dir:data/normal-samples}") String normalSampleDir,
             @Value("${app.abnormal-sample.eeg-base-url:http://127.0.0.1:5000}") String eegSnapshotBaseUrl,
             @Value("${app.abnormal-sample.zone-id:Asia/Shanghai}") String configuredZoneId,
             @Value("${app.abnormal-sample.window-ms:10000}") long windowMs,
             @Value("${app.abnormal-sample.video-cache-ms:15000}") long videoCacheMs,
             @Value("${app.abnormal-sample.video-export-fps:${app.abnormal-sample.video-fps:15}}") int videoFps,
-            @Value("${app.abnormal-sample.max-bytes:53687091200}") long maxBytes
+            @Value("${app.abnormal-sample.max-bytes:53687091200}") long maxBytes,
+            @Value("${app.normal-sample.max-bytes:21474836480}") long normalMaxBytes
     ) {
         this.sampleRoot = Path.of(sampleDir);
+        this.normalSampleRoot = Path.of(normalSampleDir);
         this.eegSnapshotBaseUrl = trimTrailingSlash(eegSnapshotBaseUrl);
         this.zoneId = ZoneId.of(StringUtils.hasText(configuredZoneId) ? configuredZoneId : "Asia/Shanghai");
         this.windowMs = Math.max(1000, windowMs);
         this.videoCacheMs = Math.max(this.windowMs, videoCacheMs);
         this.videoFps = Math.max(1, videoFps);
         this.maxBytes = Math.max(0, maxBytes);
+        this.normalMaxBytes = Math.max(0, normalMaxBytes);
     }
 
     public boolean shouldRecordVideoFrame(String cameraId, long timestamp) {
@@ -125,13 +131,16 @@ public class AbnormalSampleService {
         long now = System.currentTimeMillis();
         long eventTs = request.getTimestamp() > 0 ? request.getTimestamp() : now;
         String eventId = StringUtils.hasText(request.getEventId()) ? sanitize(request.getEventId()) : "sample_" + UUID.randomUUID().toString().replace("-", "");
-        if (maxBytes > 0 && directorySize(sampleRoot) >= maxBytes) {
+        boolean normalSample = isNormalSample(request);
+        Path targetRoot = normalSample ? normalSampleRoot : sampleRoot;
+        long targetMaxBytes = normalSample ? normalMaxBytes : maxBytes;
+        if (targetMaxBytes > 0 && directorySize(targetRoot) >= targetMaxBytes) {
             return Map.of("captureStatus", "skipped", "reason", "sample storage limit reached", "eventId", eventId);
         }
 
         long fromTs = Math.max(0, eventTs - windowMs);
         LocalDate date = Instant.ofEpochMilli(eventTs).atZone(zoneId).toLocalDate();
-        Path workDir = sampleRoot
+        Path workDir = targetRoot
                 .resolve(String.format("%04d", date.getYear()))
                 .resolve(String.format("%02d", date.getMonthValue()))
                 .resolve(String.format("%02d", date.getDayOfMonth()))
@@ -139,11 +148,19 @@ public class AbnormalSampleService {
         Path zipPath = workDir.getParent().resolve(eventId + ".zip");
 
         try {
-            Files.createDirectories(workDir);
             List<VideoFrameSample> frames = getVideoFrames(request.getCameraId(), fromTs, eventTs);
             List<JSONObject> faceLogs = getFacePredictions(request.getCameraId(), fromTs, eventTs);
             JSONObject eegSnapshot = fetchEegSnapshot(request.getWorkerId(), eventTs);
+            if (requiresCompleteSensorData(request) && (faceLogs.isEmpty() || !hasEegSnapshot(eegSnapshot))) {
+                return Map.of(
+                        "captureStatus", "skipped",
+                        "reason", "sample requires face and eeg data",
+                        "eventId", eventId,
+                        "missing", missingNormalRequirements(faceLogs, eegSnapshot)
+                );
+            }
 
+            Files.createDirectories(workDir);
             boolean videoOk = writeVideo(workDir.resolve("video").resolve("face.mp4"), frames);
             writeJsonLines(workDir.resolve("face").resolve("predictions.jsonl"), faceLogs);
             writeEegFiles(workDir.resolve("eeg"), eegSnapshot);
@@ -162,9 +179,38 @@ public class AbnormalSampleService {
             zipDirectory(workDir, zipPath);
             return Map.of("captureStatus", "ok", "samplePath", zipPath.toString(), "eventId", eventId, "partial", !missing.isEmpty(), "missing", missing);
         } catch (Exception e) {
-            log.warn("abnormal sample capture failed | eventId={} message={}", eventId, e.getMessage(), e);
+            log.warn("{} sample capture failed | eventId={} message={}", normalSample ? "normal" : "abnormal", eventId, e.getMessage(), e);
             return Map.of("captureStatus", "failed", "reason", e.getMessage(), "eventId", eventId);
         }
+    }
+
+    private boolean isNormalSample(AbnormalSampleRequest request) {
+        return "normal_sample".equals(defaultString(request.getAlertType(), ""));
+    }
+
+    private boolean requiresCompleteSensorData(AbnormalSampleRequest request) {
+        String alertType = defaultString(request.getAlertType(), "");
+        return "normal_sample".equals(alertType) || "fusion_abnormal".equals(alertType);
+    }
+
+    private boolean hasEegSnapshot(JSONObject eegSnapshot) {
+        if (eegSnapshot == null) {
+            return false;
+        }
+        return eegSnapshot.getIntValue("predictionCount") > 0
+                || eegSnapshot.getIntValue("rawTgamCount") > 0
+                || eegSnapshot.getIntValue("rawWaveCount") > 0;
+    }
+
+    private List<String> missingNormalRequirements(List<JSONObject> faceLogs, JSONObject eegSnapshot) {
+        List<String> missing = new ArrayList<>();
+        if (faceLogs == null || faceLogs.isEmpty()) {
+            missing.add("face_predictions");
+        }
+        if (!hasEegSnapshot(eegSnapshot)) {
+            missing.add("eeg_snapshot");
+        }
+        return missing;
     }
 
     private Map<String, Object> buildManifest(AbnormalSampleRequest request, String eventId, long eventTs, long fromTs,
@@ -185,6 +231,7 @@ public class AbnormalSampleService {
         manifest.put("workerId", request.getWorkerId());
         manifest.put("cameraId", defaultString(request.getCameraId(), ""));
         manifest.put("alertType", defaultString(request.getAlertType(), "face_abnormal"));
+        manifest.put("sampleType", isNormalSample(request) ? "normal" : "abnormal");
         manifest.put("emotion", defaultString(request.getEmotion(), ""));
         manifest.put("message", defaultString(request.getMessage(), ""));
         manifest.put("partial", partial);

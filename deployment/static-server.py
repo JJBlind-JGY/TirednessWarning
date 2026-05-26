@@ -14,7 +14,7 @@ def build_handler(web_root, face_target, api_target, eeg_target):
     web_root = os.path.abspath(web_root)
 
     class Handler(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
+        protocol_version = "HTTP/1.0"
 
         def do_GET(self):
             self.route()
@@ -65,10 +65,12 @@ def build_handler(web_root, face_target, api_target, eeg_target):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(data)
 
         def proxy(self, target_base, target_path):
+            self.close_connection = True
             target_url = target_base.rstrip("/") + target_path
             body = None
             length = self.headers.get("Content-Length")
@@ -88,14 +90,19 @@ def build_handler(web_root, face_target, api_target, eeg_target):
                         if key.lower() in {"connection", "transfer-encoding"}:
                             continue
                         self.send_header(key, value)
+                    self.send_header("Connection", "close")
                     self.end_headers()
-                    shutil.copyfileobj(response, self.wfile)
+                    if target_path.startswith("/eeg/stream"):
+                        self.stream_sse(response)
+                    else:
+                        shutil.copyfileobj(response, self.wfile)
             except urllib.error.HTTPError as error:
                 self.send_response(error.code)
                 for key, value in error.headers.items():
                     if key.lower() in {"connection", "transfer-encoding"}:
                         continue
                     self.send_header(key, value)
+                self.send_header("Connection", "close")
                 self.end_headers()
                 shutil.copyfileobj(error, self.wfile)
             except Exception as error:
@@ -103,8 +110,17 @@ def build_handler(web_root, face_target, api_target, eeg_target):
                 self.send_response(502)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.send_header("Content-Length", str(len(message)))
+                self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(message)
+
+        def stream_sse(self, response):
+            while True:
+                line = response.readline()
+                if not line:
+                    break
+                self.wfile.write(line)
+                self.wfile.flush()
 
         def log_message(self, fmt, *args):
             print("%s - %s" % (self.address_string(), fmt % args))

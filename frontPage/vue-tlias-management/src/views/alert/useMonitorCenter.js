@@ -12,7 +12,8 @@ const GO2RTC_BASE_URL = import.meta.env.VITE_GO2RTC_BASE_URL || 'http://127.0.0.
 const MAX_MONITOR_BINDINGS = Number(import.meta.env.VITE_MAX_MONITOR_BINDINGS || 24)
 const ALERT_LOG_DATE_CHECK_MS = 30000
 const FACE_ABNORMAL_SAMPLE_HOLD_MS = 6000
-const ABNORMAL_SAMPLE_COOLDOWN_MS = 120000
+const ABNORMAL_SAMPLE_COOLDOWN_MS = 25000
+const NORMAL_SAMPLE_COOLDOWN_MS = 25000
 const VALID_EEG_HOLD_MS = 10000
 const VALID_FACE_HOLD_MS = 8000
 const ABNORMAL_POPUP_COOLDOWN_MS = 90000
@@ -184,6 +185,8 @@ function createBinding(seed = 1) {
     videoUploading: false, uploadPercent: 0, localVideoUrl: '', videoWidth: 0, videoHeight: 0,
     fatigueStreak: 0, abnormalPopupCandidate: '', abnormalPopupStreak: 0, alertHistoryStreak: 0, lastPopupAt: 0, lastAlertHistoryAt: 0,
     faceAbnormalStartedAt: 0, lastAbnormalSampleAt: 0, lastAbnormalSampleStatus: '',
+    lastNormalSampleAt: 0, lastNormalSampleStatus: '',
+    lastNormalInferenceLogAt: 0, lastNormalInferenceLogStatus: '',
     hasPopupWarning: false, popupWarningActive: false, popupWarningEmotion: '', latestWarningLevel: 'info', latestEmotion: 'normal', faceSubscription: null
   })
 }
@@ -354,46 +357,108 @@ function pushAlertHistory(binding, level, message = getWarningText(binding), typ
   void persistAlertHistoryItem(item)
 }
 
-async function captureAbnormalSample(binding, payload = {}) {
+async function captureSample(binding, payload = {}) {
   const timestamp = Date.now()
+  const alertType = payload.alertType || 'face_abnormal'
+  const isNormalSample = alertType === 'normal_sample'
+  const eventSuffix = isNormalSample ? 'normal-sample' : (alertType === 'fusion_abnormal' ? 'fusion-abnormal' : 'face-abnormal')
   try {
     const response = await fetch(`${FACE_SERVICE_BASE}/abnormal-samples`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        eventId: `${binding.id}-${timestamp}-face-abnormal`,
+        eventId: `${binding.id}-${timestamp}-${eventSuffix}`,
         timestamp,
         personId: binding.personId || '',
         personName: binding.personName || '未绑定人员',
         workerId: binding.workerId,
         cameraId: binding.faceChannelId || payload.userId || '',
-        alertType: 'face_abnormal',
-        emotion: payload.emotion5 || binding.faceEmotionKey || '',
-        message: `${binding.personName || '当前人员'} 面部状态持续异常`
+        alertType,
+        emotion: payload.emotion || payload.emotion5 || binding.faceEmotionKey || '',
+        message: payload.message || `${binding.personName || '当前人员'} ${isNormalSample ? '状态正常样本采集' : '融合状态持续异常'}`
       })
     })
-    if (!response.ok) throw new Error(`abnormal sample capture failed: ${response.status}`)
+    if (!response.ok) throw new Error(`${alertType} sample capture failed: ${response.status}`)
     const result = await response.json()
-    binding.lastAbnormalSampleStatus = result?.data?.captureStatus || 'ok'
+    if (isNormalSample) binding.lastNormalSampleStatus = result?.data?.captureStatus || 'ok'
+    else binding.lastAbnormalSampleStatus = result?.data?.captureStatus || 'ok'
   } catch (error) {
-    binding.lastAbnormalSampleStatus = 'failed'
-    console.warn('Failed to capture abnormal sample', error)
+    if (isNormalSample) binding.lastNormalSampleStatus = 'failed'
+    else binding.lastAbnormalSampleStatus = 'failed'
+    console.warn(`Failed to capture ${alertType} sample`, error)
   }
 }
 
+async function captureAbnormalSample(binding, payload = {}) {
+  return captureSample(binding, { ...payload, alertType: payload.alertType || 'fusion_abnormal' })
+}
+
 function maybeTriggerAbnormalSample(binding, payload = {}) {
-  if (!binding) return
-  const emotion = payload.emotion5 || ''
-  const now = Date.now()
-  if (!ABNORMAL_EMOTIONS.includes(emotion)) {
-    binding.faceAbnormalStartedAt = 0
-    return
-  }
-  if (!binding.faceAbnormalStartedAt) binding.faceAbnormalStartedAt = now
-  if (now - Number(binding.faceAbnormalStartedAt || 0) < FACE_ABNORMAL_SAMPLE_HOLD_MS) return
+  if (binding) binding.faceAbnormalStartedAt = 0
+}
+
+function maybeTriggerFusionAbnormalSample(binding, now = Date.now()) {
+  if (!binding || !hasPrediction(binding)) return
+  if (!ABNORMAL_EMOTIONS.includes(binding.emotion)) return
+  if (!hasFreshFace(binding, now) || !hasFreshEeg(binding, now)) return
   if (now - Number(binding.lastAbnormalSampleAt || 0) < ABNORMAL_SAMPLE_COOLDOWN_MS) return
   binding.lastAbnormalSampleAt = now
-  void captureAbnormalSample(binding, payload)
+  void captureAbnormalSample(binding, {
+    alertType: 'fusion_abnormal',
+    emotion: binding.emotion,
+    message: `${binding.personName || '当前人员'} 融合状态持续异常：${binding.emotionZh || binding.emotion}`
+  })
+}
+
+function maybeTriggerNormalSample(binding, now = Date.now()) {
+  if (!binding || !hasPrediction(binding)) return
+  if (binding.emotion !== 'normal') return
+  if (!hasFreshFace(binding, now) || !hasFreshEeg(binding, now)) return
+  if (now - Number(binding.lastNormalSampleAt || 0) < NORMAL_SAMPLE_COOLDOWN_MS) return
+  binding.lastNormalSampleAt = now
+  void captureSample(binding, {
+    alertType: 'normal_sample',
+    emotion: 'normal',
+    message: `${binding.personName || '当前人员'} 融合状态正常样本采集`
+  })
+}
+
+async function persistNormalInferenceLog(binding) {
+  const timestamp = Number(binding.stableUpdatedAt || Date.now())
+  try {
+    const response = await fetch(`${FACE_SERVICE_BASE}/normal-inference-logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: `${binding.id}-${timestamp}-normal-inference`,
+        timestamp,
+        personId: binding.personId || '',
+        personName: binding.personName || '未绑定人员',
+        workerId: binding.workerId,
+        cameraId: binding.faceChannelId || '',
+        fusionEmotion: binding.emotion || 'normal',
+        faceEmotion: binding.lastValidFaceEmotion || binding.faceEmotionKey || '',
+        eegEmotion: binding.lastValidEegEmotion || binding.eegEmotion || '',
+        confidence: Number(binding.stableConfidence || 0),
+        sampleCounts: binding.stableSampleCounts || { eeg: 0, face: 0 },
+        message: `${binding.personName || '当前人员'} 融合状态正常，系统持续运行`
+      })
+    })
+    if (!response.ok) throw new Error(`normal inference log save failed: ${response.status}`)
+    binding.lastNormalInferenceLogStatus = 'ok'
+  } catch (error) {
+    binding.lastNormalInferenceLogStatus = 'failed'
+    console.warn('Failed to persist normal inference log', error)
+  }
+}
+
+function maybePersistNormalInferenceLog(binding, now = Date.now()) {
+  if (!binding || binding.emotion !== 'normal') return
+  if (!hasFreshFace(binding, now) || !hasFreshEeg(binding, now)) return
+  const stableAt = Number(binding.stableUpdatedAt || 0)
+  if (!stableAt || Number(binding.lastNormalInferenceLogAt || 0) === stableAt) return
+  binding.lastNormalInferenceLogAt = stableAt
+  void persistNormalInferenceLog(binding)
 }
 
 function parsePercent(value) {
@@ -785,7 +850,10 @@ function updateFusionState(binding) {
   const now = Date.now()
   const committed = settleStableSegments(binding, now)
   recordLatestSensorSamples(binding, now)
-  if (committed) maybeShowAbnormalNotification(binding)
+  if (committed) {
+    maybeShowAbnormalNotification(binding)
+    maybePersistNormalInferenceLog(binding, now)
+  }
 }
 
 function refreshFusionStates() {
@@ -807,6 +875,8 @@ function refreshFusionStates() {
     // summarizeEyeWindow(binding, now)
     // maybeTriggerEyeAlerts(binding, now)
     updateFusionState(binding)
+    maybeTriggerFusionAbnormalSample(binding, now)
+    maybeTriggerNormalSample(binding, now)
     if (hadPrediction || hasPrediction(binding)) evaluateWarning(binding)
   })
 }
@@ -830,7 +900,7 @@ const faceMonitor = createFaceMonitor({
   updateFusionState,
   // Eye detection alerts are disabled on main; develop keeps updateEyeState wired in.
   // updateEyeState,
-  maybeTriggerAbnormalSample
+  maybeTriggerAbnormalSample: null
 })
 
 function syncBindingsWithDevices() {

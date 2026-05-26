@@ -4,12 +4,14 @@ import com.server.common.utils.R;
 import com.server.faceservice.config.AbnormalSampleRequest;
 import com.server.faceservice.config.AlertLog;
 import com.server.faceservice.config.CameraConfig;
+import com.server.faceservice.config.NormalInferenceLog;
 import com.server.faceservice.config.PersonnelConfig;
 import com.server.faceservice.config.VideoStreamAutoRunner;
 import com.server.faceservice.service.AbnormalSampleService;
 import com.server.faceservice.service.AlertLogService;
 import com.server.faceservice.service.CameraConfigService;
 import com.server.faceservice.service.FaceDetectService;
+import com.server.faceservice.service.NormalInferenceLogService;
 import com.server.faceservice.service.PersonnelConfigService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -43,6 +45,9 @@ public class FaceDetectController {
 
     @Autowired
     private AlertLogService alertLogService;
+
+    @Autowired
+    private NormalInferenceLogService normalInferenceLogService;
 
     @Autowired
     private AbnormalSampleService abnormalSampleService;
@@ -166,6 +171,11 @@ public class FaceDetectController {
         } catch (IllegalArgumentException e) {
             return R.fail(e.getMessage());
         }
+    }
+
+    @PostMapping("/normal-inference-logs")
+    public R appendNormalInferenceLog(@RequestBody NormalInferenceLog normalInferenceLog) {
+        return R.ok(Map.of("data", normalInferenceLogService.append(normalInferenceLog)));
     }
 
     @PostMapping("/abnormal-samples")

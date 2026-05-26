@@ -246,12 +246,19 @@ app.go2rtc.api-base=http://127.0.0.1:1984
 app.abnormal-sample.eeg-base-url=http://127.0.0.1:5000
 app.alert-log.dir=logs/alerts
 app.abnormal-sample.dir=data/abnormal-samples
+app.normal-sample.dir=data/normal-samples
+app.normal-sample.max-bytes=21474836480
+app.normal-inference-log.dir=logs/normal-inference
+app.normal-inference-log.retention-days=4
 app.personnel.config-file=config/personnel-config.json
 spring.application.name=faceservice
 server.port=8081
 spring.servlet.multipart.enabled=true
 spring.servlet.multipart.max-file-size=1000MB
 spring.servlet.multipart.max-request-size=1000MB
+server.servlet.encoding.charset=UTF-8
+server.servlet.encoding.enabled=true
+server.servlet.encoding.force=true
 server.ssl.enabled=false
 "@ | Set-Content -LiteralPath (Join-Path $ReleaseDir "config\application-release.properties") -Encoding UTF8
 }
