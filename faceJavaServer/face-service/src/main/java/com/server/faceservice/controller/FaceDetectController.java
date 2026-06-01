@@ -10,10 +10,15 @@ import com.server.faceservice.config.VideoStreamAutoRunner;
 import com.server.faceservice.service.AbnormalSampleService;
 import com.server.faceservice.service.AlertLogService;
 import com.server.faceservice.service.CameraConfigService;
+import com.server.faceservice.service.DemoSampleService;
+import com.server.faceservice.service.DemoSampleService.DemoSampleValidationException;
 import com.server.faceservice.service.FaceDetectService;
 import com.server.faceservice.service.NormalInferenceLogService;
 import com.server.faceservice.service.PersonnelConfigService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.Resource;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -51,6 +56,9 @@ public class FaceDetectController {
 
     @Autowired
     private AbnormalSampleService abnormalSampleService;
+
+    @Autowired
+    private DemoSampleService demoSampleService;
 
     @Autowired
     private VideoStreamAutoRunner videoStreamAutoRunner;
@@ -181,5 +189,33 @@ public class FaceDetectController {
     @PostMapping("/abnormal-samples")
     public R captureAbnormalSample(@RequestBody AbnormalSampleRequest request) {
         return R.ok(Map.of("data", abnormalSampleService.capture(request)));
+    }
+
+    @PostMapping("/demo-samples/upload")
+    public R uploadDemoSample(@RequestPart("files") MultipartFile[] files) {
+        try {
+            return R.ok(Map.of("data", demoSampleService.upload(files)));
+        } catch (DemoSampleValidationException e) {
+            return R.fail(e.getMessage()).put("missing", e.getMissing());
+        } catch (IllegalArgumentException e) {
+            return R.fail(e.getMessage());
+        }
+    }
+
+    @GetMapping("/demo-samples/{sampleId}")
+    public R getDemoSample(@PathVariable String sampleId) {
+        try {
+            return R.ok(Map.of("data", demoSampleService.load(sampleId)));
+        } catch (IllegalArgumentException e) {
+            return R.fail(e.getMessage());
+        }
+    }
+
+    @GetMapping("/demo-samples/{sampleId}/video")
+    public ResponseEntity<Resource> getDemoSampleVideo(@PathVariable String sampleId) {
+        Resource resource = demoSampleService.video(sampleId);
+        return ResponseEntity.ok()
+                .contentType(MediaType.valueOf("video/mp4"))
+                .body(resource);
     }
 }

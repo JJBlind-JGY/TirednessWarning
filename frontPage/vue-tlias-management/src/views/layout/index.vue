@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { Cpu, Histogram, Monitor, User, VideoCamera } from '@element-plus/icons-vue'
+import { Cpu, FolderOpened, Histogram, Monitor, User, VideoCamera } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
@@ -9,6 +9,7 @@ const loginName = ref('')
 const activeMenu = computed(() => {
   if (route.path.startsWith('/manage/personnel')) return '/manage/personnel'
   if (route.path.startsWith('/manage/device')) return '/manage/device'
+  if (route.path.startsWith('/samples/upload')) return '/samples/upload'
   if (route.path.startsWith('/alert/eeg') || route.path.includes('/eeg')) return '/alert/eeg'
   if (route.path.startsWith('/alert/face') || route.path.includes('/face')) return '/alert/face'
   return '/alert'
@@ -46,6 +47,10 @@ onMounted(() => {
           <el-menu-item index="/alert/face" class="nav-item">
             <el-icon><VideoCamera /></el-icon>
             <span>微表情界面</span>
+          </el-menu-item>
+          <el-menu-item index="/samples/upload" class="nav-item">
+            <el-icon><FolderOpened /></el-icon>
+            <span>样本数据上传</span>
           </el-menu-item>
           <el-menu-item index="/manage/personnel" class="nav-item">
             <el-icon><User /></el-icon>

@@ -247,6 +247,7 @@ app.abnormal-sample.eeg-base-url=http://127.0.0.1:5000
 app.alert-log.dir=logs/alerts
 app.abnormal-sample.dir=data/abnormal-samples
 app.normal-sample.dir=data/normal-samples
+app.demo-sample.dir=data/demo-samples
 app.normal-sample.max-bytes=21474836480
 app.normal-inference-log.dir=logs/normal-inference
 app.normal-inference-log.retention-days=4

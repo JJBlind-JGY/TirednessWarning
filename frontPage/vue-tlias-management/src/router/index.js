@@ -8,6 +8,7 @@ import AlertEegView from '@/views/alert/eeg.vue'
 import AlertFaceView from '@/views/alert/face.vue'
 import PersonnelManageView from '@/views/manage/personnel.vue'
 import DeviceManageView from '@/views/manage/device.vue'
+import SampleUploadView from '@/views/samples/upload.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -23,6 +24,7 @@ const router = createRouter({
         { path: 'alert/device/:id', name: 'alertDetail', component: AlertDetailView },
         { path: 'alert/device/:id/eeg', name: 'alertEeg', component: AlertEegView },
         { path: 'alert/device/:id/face', name: 'alertFace', component: AlertFaceView },
+        { path: 'samples/upload', name: 'sampleUpload', component: SampleUploadView },
         { path: 'manage/personnel', name: 'personnelManage', component: PersonnelManageView },
         { path: 'manage/device', name: 'deviceManage', component: DeviceManageView }
       ]
