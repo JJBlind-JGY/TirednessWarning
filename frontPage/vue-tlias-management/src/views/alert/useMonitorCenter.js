@@ -35,6 +35,8 @@ const EYE_DETAIL_CONTINUOUS_MS = 6000
 const EYE_MAIN_CONTINUOUS_MS = 12000
 const EYE_MAIN_ALERT_COOLDOWN_MS = 60000
 const EYE_MAX_SAMPLE_GAP_MS = 3500
+const CONFIG_LOAD_RETRY_COUNT = 5
+const CONFIG_LOAD_RETRY_DELAY_MS = 600
 let fusionRefreshTimer = null
 let alertLogDateTimer = null
 
@@ -92,6 +94,25 @@ function replaceArray(target, values) {
   target.splice(0, target.length, ...values)
 }
 
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function fetchJsonWithRetry(url, label) {
+  let lastError = null
+  for (let attempt = 1; attempt <= CONFIG_LOAD_RETRY_COUNT; attempt += 1) {
+    try {
+      const response = await fetch(url, { cache: 'no-store' })
+      if (!response.ok) throw new Error(`${label} load failed: ${response.status}`)
+      return await response.json()
+    } catch (error) {
+      lastError = error
+      if (attempt < CONFIG_LOAD_RETRY_COUNT) await delay(CONFIG_LOAD_RETRY_DELAY_MS)
+    }
+  }
+  throw lastError || new Error(`${label} load failed`)
+}
+
 function normalizePersonnel(item, index = 0) {
   const uid = String(item.uid || item.id || `P${String(index + 1).padStart(3, '0')}`)
   return { id: String(item.id || uid), uid, name: String(item.name || `人员${index + 1}`), type: String(item.type || '值班员') }
@@ -113,45 +134,39 @@ function normalizeCamera(item, index = 0) {
 }
 
 async function loadPersonnel() {
-  const items = []
   try {
-    const response = await fetch(`${FACE_SERVICE_BASE}/personnel`)
-    if (response.ok) {
-      const payload = await response.json()
-      const personnel = Array.isArray(payload?.data) ? payload.data : []
-      replaceArray(items, personnel.map(normalizePersonnel))
-    }
-  } catch (error) { console.warn('Failed to load remote personnel config', error) }
-  replaceArray(state.personnelOptions, items)
-  persistPersonnel()
+    const payload = await fetchJsonWithRetry(`${FACE_SERVICE_BASE}/personnel`, 'personnel config')
+    const personnel = Array.isArray(payload?.data) ? payload.data : []
+    replaceArray(state.personnelOptions, personnel.map(normalizePersonnel))
+    persistPersonnel()
+  } catch (error) {
+    console.warn('Failed to load remote personnel config, keep local cache', error)
+    replaceArray(state.personnelOptions, readLocalList(PERSONNEL_STORAGE_KEY, []).map(normalizePersonnel))
+  }
 }
 
 async function loadDevices() {
-  const items = []
   try {
-    const response = await fetch('/eeg/devices')
-    if (response.ok) {
-      const payload = await response.json()
-      const eegDevices = Array.isArray(payload?.data) ? payload.data : []
-      replaceArray(items, eegDevices.map(normalizeDevice))
-    }
-  } catch (error) { console.warn('Failed to load remote eeg device config', error) }
-  replaceArray(DEVICE_OPTIONS, items)
-  persistDevices()
+    const payload = await fetchJsonWithRetry('/eeg/devices', 'eeg device config')
+    const eegDevices = Array.isArray(payload?.data) ? payload.data : []
+    replaceArray(DEVICE_OPTIONS, eegDevices.map(normalizeDevice))
+    persistDevices()
+  } catch (error) {
+    console.warn('Failed to load remote eeg device config, keep local cache', error)
+    replaceArray(DEVICE_OPTIONS, readLocalList(DEVICE_STORAGE_KEY, []).map(normalizeDevice))
+  }
 }
 
 async function loadCameras() {
-  const items = []
   try {
-    const response = await fetch(`${FACE_SERVICE_BASE}/cameras`)
-    if (response.ok) {
-      const payload = await response.json()
-      const cameras = Array.isArray(payload?.data) ? payload.data : []
-      replaceArray(items, cameras.map(normalizeCamera))
-    }
-  } catch (error) { console.warn('Failed to load remote camera config', error) }
-  replaceArray(CAMERA_OPTIONS, items)
-  persistCameras()
+    const payload = await fetchJsonWithRetry(`${FACE_SERVICE_BASE}/cameras`, 'camera config')
+    const cameras = Array.isArray(payload?.data) ? payload.data : []
+    replaceArray(CAMERA_OPTIONS, cameras.map(normalizeCamera))
+    persistCameras()
+  } catch (error) {
+    console.warn('Failed to load remote camera config, keep local cache', error)
+    replaceArray(CAMERA_OPTIONS, readLocalList(CAMERA_STORAGE_KEY, []).map(normalizeCamera))
+  }
 }
 
 function persistPersonnel() { writeLocalList(PERSONNEL_STORAGE_KEY, state.personnelOptions.map(({ id, uid, name, type }) => ({ id, uid, name, type }))) }

@@ -110,7 +110,8 @@ public class DemoSampleService {
             JsonNode manifest = objectMapper.readTree(sampleDir.resolve("manifest.json").toFile());
             JsonNode rawWave = objectMapper.readTree(sampleDir.resolve("eeg/raw_wave.json").toFile());
             JsonNode rawTgam = objectMapper.readTree(sampleDir.resolve("eeg/raw_tgam.json").toFile());
-            JsonNode latestEeg = readLastJsonLine(sampleDir.resolve("eeg/predictions.jsonl"));
+            List<JsonNode> eegPredictions = readJsonLines(sampleDir.resolve("eeg/predictions.jsonl"));
+            JsonNode latestEeg = eegPredictions.isEmpty() ? null : eegPredictions.get(eegPredictions.size() - 1);
             JsonNode latestFace = readLastJsonLine(sampleDir.resolve("face/predictions.jsonl"));
 
             Map<String, Object> detail = new LinkedHashMap<>();
@@ -120,6 +121,7 @@ public class DemoSampleService {
             detail.put("rawWave", buildRawWave(rawWave));
             detail.put("rawTgam", buildRawTgam(rawTgam));
             detail.put("latestEeg", latestEeg == null ? Map.of() : objectMapper.convertValue(latestEeg, Map.class));
+            detail.put("eegTimeline", buildEegTimeline(eegPredictions));
             detail.put("latestFace", latestFace == null ? Map.of() : objectMapper.convertValue(latestFace, Map.class));
             return detail;
         } catch (IOException e) {
@@ -253,6 +255,20 @@ public class DemoSampleService {
         return latest;
     }
 
+    private List<JsonNode> readJsonLines(Path path) throws IOException {
+        List<JsonNode> result = new ArrayList<>();
+        try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!StringUtils.hasText(line)) {
+                    continue;
+                }
+                result.add(objectMapper.readTree(line));
+            }
+        }
+        return result;
+    }
+
     private Map<String, Object> buildRawWave(JsonNode rawWave) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("workerId", rawWave.path("workerId").asInt(0));
@@ -269,6 +285,37 @@ public class DemoSampleService {
         result.put("rawTgamFs", rawTgam.path("rawTgamFs").asInt(0));
         result.put("sampleCount", rawTgam.path("sampleCount").asInt(rawTgam.path("samples").size()));
         return result;
+    }
+
+    private List<Map<String, Object>> buildEegTimeline(List<JsonNode> predictions) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (JsonNode prediction : predictions) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("time", readPredictionTime(prediction));
+            item.put("emotion", prediction.path("emotion").asText(""));
+            item.put("emotionZh", prediction.path("emotion_zh").asText(""));
+            item.put("raw_powers", objectMapper.convertValue(prediction.path("raw_powers"), Map.class));
+            result.add(item);
+        }
+        return result;
+    }
+
+    private long readPredictionTime(JsonNode prediction) {
+        String[] fields = {"analysis_ts", "analysisTime", "timestamp", "ts", "time"};
+        for (String field : fields) {
+            JsonNode value = prediction.path(field);
+            if (value.isNumber()) {
+                return value.asLong();
+            }
+            if (value.isTextual() && StringUtils.hasText(value.asText())) {
+                try {
+                    return Long.parseLong(value.asText().trim());
+                } catch (NumberFormatException ignored) {
+                    // Try the next known timestamp field.
+                }
+            }
+        }
+        return 0;
     }
 
     private String defaultString(String value, String fallback) {

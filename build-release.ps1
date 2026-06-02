@@ -223,10 +223,20 @@ Invoke-Step "Copy external configuration" {
     Copy-Path (Assert-Path "faceJavaServer\go2rtc\go2rtc.yaml") (Join-Path $ReleaseDir "config\go2rtc.yaml")
     Copy-Path (Assert-Path "facePythonServer\config.yaml") (Join-Path $ReleaseDir "config\python-config.yaml")
 
-    if (Test-Path -LiteralPath (Join-Root "faceJavaServer\face-service\config\camera-config.json")) {
+    if (Test-Path -LiteralPath (Join-Root "faceJavaServer\config\camera-config.json")) {
+        Copy-Path (Join-Root "faceJavaServer\config\camera-config.json") (Join-Path $ReleaseDir "config\camera-config.json")
+    } elseif (Test-Path -LiteralPath (Join-Root "faceJavaServer\face-service\config\camera-config.json")) {
         Copy-Path (Join-Root "faceJavaServer\face-service\config\camera-config.json") (Join-Path $ReleaseDir "config\camera-config.json")
     } else {
         "[]" | Set-Content -LiteralPath (Join-Path $ReleaseDir "config\camera-config.json") -Encoding UTF8
+    }
+
+    if (Test-Path -LiteralPath (Join-Root "faceJavaServer\config\personnel-config.json")) {
+        Copy-Path (Join-Root "faceJavaServer\config\personnel-config.json") (Join-Path $ReleaseDir "config\personnel-config.json")
+    } elseif (Test-Path -LiteralPath (Join-Root "faceJavaServer\face-service\config\personnel-config.json")) {
+        Copy-Path (Join-Root "faceJavaServer\face-service\config\personnel-config.json") (Join-Path $ReleaseDir "config\personnel-config.json")
+    } else {
+        "[]" | Set-Content -LiteralPath (Join-Path $ReleaseDir "config\personnel-config.json") -Encoding UTF8
     }
 
     if (Test-Path -LiteralPath (Join-Root "frontPage\vue-tlias-management\src\py\config\eeg-devices.json")) {

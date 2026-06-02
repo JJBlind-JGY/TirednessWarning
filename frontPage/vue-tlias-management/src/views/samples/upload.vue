@@ -17,6 +17,8 @@ const RAW_WAVE_LIMIT = 512
 const WAVE_SMOOTH_WINDOW = 5
 const WAVE_DISPLAY_RANGE = 100
 const BAND_NAMES = ['delta', 'theta', 'alpha', 'beta', 'gamma']
+const BAND_LABELS = { delta: 'Delta', theta: 'Theta', alpha: 'Alpha', beta: 'Beta', gamma: 'Gamma' }
+const BAND_COLORS = { delta: '#2563eb', theta: '#0891b2', alpha: '#0f766e', beta: '#ea580c', gamma: '#7c3aed' }
 const EMOTION_TEXT = { normal: '正常', anxiety: '焦虑', stress: '紧张', fatigue: '疲劳', weakness: '虚弱' }
 const WARNING_TEXT = {
   normal: '预警：当前状态正常',
@@ -31,23 +33,32 @@ const router = useRouter()
 const fileInputRef = ref(null)
 const videoRef = ref(null)
 const chartRef = ref(null)
+const bandChartRef = ref(null)
 const uploading = ref(false)
 const uploadPercent = ref(0)
 const sample = ref(null)
 const playbackState = ref('idle')
 const rawWaveBuffer = ref([])
-const bandSnapshot = ref({ delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 })
+const visibleBands = ref([...BAND_NAMES])
 let chartInstance = null
+let bandChartInstance = null
 let playbackTimer = null
 let playbackStartedAt = 0
 let waveScale = 1
 let playedSampleCount = 0
+let playedTimelineCount = 0
 
 const manifest = computed(() => sample.value?.manifest || {})
 const latestEeg = computed(() => sample.value?.latestEeg || {})
 const latestFace = computed(() => sample.value?.latestFace || {})
 const rawWave = computed(() => sample.value?.rawWave || {})
 const rawSamples = computed(() => Array.isArray(rawWave.value.samples) ? rawWave.value.samples : [])
+const eegTimeline = computed(() => Array.isArray(sample.value?.eegTimeline) ? sample.value.eegTimeline : [])
+const currentBandSnapshot = computed(() => {
+  const visible = getVisibleTimeline()
+  const latestVisible = visible.length ? visible[visible.length - 1] : latestEeg.value
+  return getBandSnapshot(latestVisible?.raw_powers)
+})
 const emotionKey = computed(() => normalizeEmotion(manifest.value.emotion || 'normal'))
 const emotionText = computed(() => EMOTION_TEXT[emotionKey.value] || '正常')
 const warningText = computed(() => WARNING_TEXT[emotionKey.value] || WARNING_TEXT.normal)
@@ -57,7 +68,6 @@ const sampleTime = computed(() => formatShortTime(manifest.value.timestamp || ma
 const faceStatusText = computed(() => playbackState.value === 'playing' ? '播放中' : (sample.value ? '已加载' : '待加载'))
 const eegStatusText = computed(() => playbackState.value === 'playing' ? '播放中' : (sample.value ? '已加载' : '待加载'))
 const waveStatusText = computed(() => playbackState.value === 'playing' ? '实时更新' : (rawWaveBuffer.value.length ? '播放结束' : '等待波形'))
-const waveXAxisData = Array.from({ length: RAW_WAVE_LIMIT }, (_, index) => index)
 
 function chooseFolder() {
   fileInputRef.value?.click()
@@ -83,9 +93,8 @@ function validateFiles(files) {
   const fileSet = new Set(relativeNames)
   const missing = REQUIRED_FILES.filter((required) => !fileSet.has(required))
   if (missing.length) return { ok: false, message: `当前样本目录缺少以下文件：\n${missing.join('\n')}\n\n请重新选择系统保存出的完整样本目录。` }
-  const unexpected = relativeNames.filter((name) => !REQUIRED_FILES.includes(name))
-  if (unexpected.length) return { ok: false, message: `当前样本目录文件结构与系统保存结构不一致：\n${unexpected.join('\n')}\n\n请直接选择单个系统样本目录。` }
-  const emptyFile = files.find((file) => file.size <= 0)
+  const requiredFiles = files.filter((file) => REQUIRED_FILES.includes(stripRoot(normalizePath(file.webkitRelativePath || file.name), root)))
+  const emptyFile = requiredFiles.find((file) => file.size <= 0)
   if (emptyFile) return { ok: false, message: `样本文件不能为空：${stripRoot(normalizePath(emptyFile.webkitRelativePath || emptyFile.name), root)}` }
   return { ok: true }
 }
@@ -107,7 +116,12 @@ function normalizePath(value) {
 
 async function uploadFiles(files) {
   const formData = new FormData()
-  files.forEach((file) => formData.append('files', file, file.webkitRelativePath || file.name))
+  const root = findRootPrefix(files.map((file) => normalizePath(file.webkitRelativePath || file.name)))
+  files.forEach((file) => {
+    const normalized = normalizePath(file.webkitRelativePath || file.name)
+    const relative = stripRoot(normalized, root)
+    if (REQUIRED_FILES.includes(relative)) formData.append('files', file, file.webkitRelativePath || file.name)
+  })
   stopPlayback()
   uploading.value = true
   uploadPercent.value = 0
@@ -152,18 +166,27 @@ async function loadSample(sampleId) {
 async function preparePlayback() {
   resetPlaybackState()
   await nextTick()
-  ensureChart()
-  refreshWaveChart()
+  resetCharts()
+  ensureCharts()
+  refreshPlaybackCharts()
   startPlayback()
 }
 
 function resetPlaybackState() {
   stopPlayback()
   rawWaveBuffer.value = []
-  bandSnapshot.value = getBandSnapshot(latestEeg.value.raw_powers)
+  visibleBands.value = [...BAND_NAMES]
   waveScale = 1
   playedSampleCount = 0
+  playedTimelineCount = 0
   playbackState.value = sample.value ? 'loaded' : 'idle'
+}
+
+function resetCharts() {
+  chartInstance?.dispose()
+  bandChartInstance?.dispose()
+  chartInstance = null
+  bandChartInstance = null
 }
 
 function startPlayback() {
@@ -191,22 +214,32 @@ function stopPlayback() {
 
 function tickPlayback() {
   const total = rawSamples.value.length
-  if (!total) return
+  const timelineTotal = eegTimeline.value.length
+  if (!total && !timelineTotal) return
   const durationMs = getPlaybackDurationMs()
   const elapsedMs = Math.min(Date.now() - playbackStartedAt, durationMs)
-  const targetCount = Math.min(total, Math.floor((elapsedMs / Math.max(durationMs, 1)) * total))
+  const targetCount = getTargetRawSampleCount(elapsedMs, durationMs, total)
   if (targetCount > playedSampleCount) {
     appendRawWave(rawSamples.value.slice(playedSampleCount, targetCount))
     playedSampleCount = targetCount
-    refreshWaveChart()
   }
-  if (elapsedMs >= durationMs || playedSampleCount >= total) {
-    appendRawWave(rawSamples.value.slice(playedSampleCount))
-    playedSampleCount = total
-    refreshWaveChart()
+  playedTimelineCount = Math.min(timelineTotal, Math.floor((elapsedMs / Math.max(durationMs, 1)) * timelineTotal))
+  refreshPlaybackCharts()
+  if (elapsedMs >= durationMs || (total ? playedSampleCount >= total : playedTimelineCount >= timelineTotal)) {
+    playedTimelineCount = timelineTotal
+    refreshPlaybackCharts()
     stopPlayback()
     playbackState.value = 'ended'
   }
+}
+
+function getTargetRawSampleCount(elapsedMs, durationMs, total) {
+  if (!total) return 0
+  const waveFs = Number(rawWave.value.waveFs || 0)
+  if (Number.isFinite(waveFs) && waveFs > 0) {
+    return Math.min(total, Math.floor((elapsedMs / 1000) * waveFs))
+  }
+  return Math.min(total, Math.floor((elapsedMs / Math.max(durationMs, 1)) * total))
 }
 
 function getPlaybackDurationMs() {
@@ -246,12 +279,8 @@ function appendRawWave(chunk = []) {
   if (rawWaveBuffer.value.length > RAW_WAVE_LIMIT) rawWaveBuffer.value.splice(0, rawWaveBuffer.value.length - RAW_WAVE_LIMIT)
 }
 
-function getDisplayWaveData() {
-  if (rawWaveBuffer.value.length >= RAW_WAVE_LIMIT) return [...rawWaveBuffer.value]
-  return [
-    ...Array.from({ length: RAW_WAVE_LIMIT - rawWaveBuffer.value.length }, () => null),
-    ...rawWaveBuffer.value
-  ]
+function getWaveXAxisData() {
+  return rawWaveBuffer.value.map((_, index) => index)
 }
 
 function getWaveChartOption() {
@@ -259,7 +288,7 @@ function getWaveChartOption() {
     color: ['#0f766e'],
     tooltip: { trigger: 'axis' },
     grid: { left: 40, right: 20, top: 24, bottom: 28 },
-    xAxis: { type: 'category', boundaryGap: false, axisLine: { lineStyle: { color: '#9db4c0' } }, data: waveXAxisData },
+    xAxis: { type: 'category', boundaryGap: false, axisLine: { lineStyle: { color: '#9db4c0' } }, data: getWaveXAxisData() },
     yAxis: { type: 'value', min: -WAVE_DISPLAY_RANGE, max: WAVE_DISPLAY_RANGE, axisLine: { show: false }, splitLine: { lineStyle: { color: '#e6eef2' } } },
     series: [{
       name: 'EEG raw wave',
@@ -270,27 +299,105 @@ function getWaveChartOption() {
       animation: false,
       lineStyle: { width: 2 },
       areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(15, 118, 110, 0.28)' }, { offset: 1, color: 'rgba(15, 118, 110, 0.02)' }]) },
-      data: getDisplayWaveData()
+      data: [...rawWaveBuffer.value]
     }]
   }
 }
 
-function ensureChart() {
+function getBandTrendChartOption() {
+  return {
+    color: BAND_NAMES.map((name) => BAND_COLORS[name]),
+    tooltip: { trigger: 'axis', valueFormatter: (value) => `${Number(value || 0).toFixed(1)}%` },
+    legend: { show: false },
+    grid: { left: 42, right: 20, top: 24, bottom: 28 },
+    xAxis: { type: 'category', boundaryGap: false, axisLine: { lineStyle: { color: '#9db4c0' } }, data: getTimelineXAxisData() },
+    yAxis: { type: 'value', min: 0, max: 100, axisLabel: { formatter: '{value}%' }, axisLine: { show: false }, splitLine: { lineStyle: { color: '#e6eef2' } } },
+    series: getVisibleBandNames().map((name) => ({
+      name: BAND_LABELS[name],
+      type: 'line',
+      showSymbol: false,
+      smooth: true,
+      animation: false,
+      lineStyle: { width: 2, color: BAND_COLORS[name] },
+      itemStyle: { color: BAND_COLORS[name] },
+      data: getBandTrendData(name)
+    }))
+  }
+}
+
+function ensureCharts() {
+  ensureWaveChart()
+  ensureBandTrendChart()
+}
+
+function ensureWaveChart() {
   if (!chartRef.value) return
   if (!chartInstance) chartInstance = echarts.init(chartRef.value)
   chartInstance.setOption(getWaveChartOption())
   chartInstance.resize()
 }
 
+function ensureBandTrendChart() {
+  if (!bandChartRef.value) return
+  if (!bandChartInstance) bandChartInstance = echarts.init(bandChartRef.value)
+  bandChartInstance.setOption(getBandTrendChartOption())
+  bandChartInstance.resize()
+}
+
+function refreshPlaybackCharts() {
+  refreshWaveChart()
+  refreshBandTrendChart()
+}
+
 function refreshWaveChart() {
-  ensureChart()
+  ensureWaveChart()
   if (!chartInstance) return
-  chartInstance.setOption({
-    xAxis: { data: waveXAxisData },
-    yAxis: { min: -WAVE_DISPLAY_RANGE, max: WAVE_DISPLAY_RANGE },
-    series: [{ data: getDisplayWaveData() }]
-  })
+  chartInstance.setOption(getWaveChartOption(), true)
   chartInstance.resize()
+}
+
+function refreshBandTrendChart() {
+  ensureBandTrendChart()
+  if (!bandChartInstance) return
+  bandChartInstance.setOption(getBandTrendChartOption(), true)
+  bandChartInstance.resize()
+}
+
+function getVisibleBandNames() {
+  return BAND_NAMES.filter((name) => visibleBands.value.includes(name))
+}
+
+function toggleBand(band) {
+  if (visibleBands.value.includes(band)) {
+    if (visibleBands.value.length <= 1) return
+    visibleBands.value = visibleBands.value.filter((name) => name !== band)
+  } else {
+    visibleBands.value = BAND_NAMES.filter((name) => name === band || visibleBands.value.includes(name))
+  }
+  refreshBandTrendChart()
+}
+
+function getTimelineXAxisData() {
+  const total = Math.max(eegTimeline.value.length, 1)
+  return Array.from({ length: total }, (_, index) => index + 1)
+}
+
+function getVisibleTimeline() {
+  if (!eegTimeline.value.length) return []
+  const count = Math.max(0, Math.min(playedTimelineCount, eegTimeline.value.length))
+  return eegTimeline.value.slice(0, count)
+}
+
+function getBandTrendData(name) {
+  const visible = getVisibleTimeline()
+  const values = visible.map((item) => Number(getBandSnapshot(item?.raw_powers)[name] || 0).toFixed(2)).map(Number)
+  return padTimelineData(values)
+}
+
+function padTimelineData(values) {
+  const total = eegTimeline.value.length
+  if (!total) return []
+  return [...values, ...Array.from({ length: Math.max(total - values.length, 0) }, () => null)]
 }
 
 function getBandSnapshot(rawPowers = {}) {
@@ -321,7 +428,10 @@ function formatShortTime(value) {
   if (Number.isNaN(date.getTime())) return '--:--:--'
   return date.toLocaleTimeString('zh-CN', { hour12: false })
 }
-function resizeChart() { chartInstance?.resize() }
+function resizeChart() {
+  chartInstance?.resize()
+  bandChartInstance?.resize()
+}
 
 window.addEventListener('resize', resizeChart)
 onMounted(() => { if (route.query.sampleId) void loadSample(String(route.query.sampleId)) })
@@ -329,7 +439,9 @@ onBeforeUnmount(() => {
   stopPlayback()
   window.removeEventListener('resize', resizeChart)
   chartInstance?.dispose()
+  bandChartInstance?.dispose()
   chartInstance = null
+  bandChartInstance = null
 })
 </script>
 
@@ -387,23 +499,40 @@ onBeforeUnmount(() => {
 
       <article class="panel eeg-panel">
         <div class="panel-head">
-          <h3>脑电波形与波段</h3>
+          <h3>脑电波形与特征波段</h3>
           <div class="eeg-actions"><el-tag :type="sample ? 'success' : 'info'">{{ getEegStatusLabel() }}</el-tag></div>
         </div>
         <div class="signal-strip">
           <div class="signal-item"><span>脑电状态</span><strong>{{ getEegStatusLabel() }}</strong></div>
           <div class="signal-item"><span>波形更新状态</span><strong>{{ waveStatusText }}</strong></div>
         </div>
-        <div class="chart-wrap">
+        <div class="chart-title">原始脑电波形</div>
+        <div class="chart-wrap wave-chart-wrap">
           <div ref="chartRef" class="eeg-chart"></div>
           <div v-if="!rawWaveBuffer.length" class="chart-empty">等待波形回放</div>
         </div>
+        <div class="chart-title">特征波段时序</div>
+        <div class="band-switch">
+          <el-button
+            v-for="band in BAND_NAMES"
+            :key="band"
+            size="small"
+            :type="visibleBands.includes(band) ? 'primary' : 'default'"
+            @click="toggleBand(band)"
+          >
+            {{ BAND_LABELS[band] }}
+          </el-button>
+        </div>
+        <div class="chart-wrap trend-chart-wrap">
+          <div ref="bandChartRef" class="trend-chart"></div>
+          <div v-if="!eegTimeline.length" class="chart-empty">等待波段数据</div>
+        </div>
         <div class="band-grid">
-          <div class="metric-box"><span>Theta 占比</span><strong>{{ formatBand(bandSnapshot.theta) }}</strong></div>
-          <div class="metric-box"><span>Alpha 占比</span><strong>{{ formatBand(bandSnapshot.alpha) }}</strong></div>
-          <div class="metric-box"><span>Beta 占比</span><strong>{{ formatBand(bandSnapshot.beta) }}</strong></div>
-          <div class="metric-box"><span>Delta 占比</span><strong>{{ formatBand(bandSnapshot.delta) }}</strong></div>
-          <div class="metric-box"><span>Gamma 占比</span><strong>{{ formatBand(bandSnapshot.gamma) }}</strong></div>
+          <div class="metric-box"><span>Theta 占比</span><strong>{{ formatBand(currentBandSnapshot.theta) }}</strong></div>
+          <div class="metric-box"><span>Alpha 占比</span><strong>{{ formatBand(currentBandSnapshot.alpha) }}</strong></div>
+          <div class="metric-box"><span>Beta 占比</span><strong>{{ formatBand(currentBandSnapshot.beta) }}</strong></div>
+          <div class="metric-box"><span>Delta 占比</span><strong>{{ formatBand(currentBandSnapshot.delta) }}</strong></div>
+          <div class="metric-box"><span>Gamma 占比</span><strong>{{ formatBand(currentBandSnapshot.gamma) }}</strong></div>
         </div>
       </article>
 
@@ -454,8 +583,13 @@ onBeforeUnmount(() => {
 .result-video { width: 100%; height: 100%; border: 0; background: #07121f; }
 .empty-box { display: flex; align-items: center; justify-content: center; color: #dbeafe; }
 .result-grid, .signal-strip, .warning-grid, .band-grid { margin-top: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.chart-wrap { position: relative; margin-top: 16px; min-height: 320px; border-radius: 8px; background: #fbfeff; border: 1px solid #e4edf2; }
+.chart-title { margin: 18px 0 8px; font-weight: 700; color: #203444; }
+.band-switch { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.chart-wrap { position: relative; border-radius: 8px; background: #fbfeff; border: 1px solid #e4edf2; }
+.wave-chart-wrap { min-height: 260px; }
+.trend-chart-wrap { min-height: 240px; }
 .eeg-chart { height: 320px; width: 100%; }
+.trend-chart { height: 240px; width: 100%; }
 .chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #7b8a97; pointer-events: none; }
 .empty-wrap { min-height: 420px; display: flex; align-items: center; justify-content: center; }
 @media (max-width: 1440px) { .content-grid { grid-template-columns: 1fr; } .config-grid, .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
