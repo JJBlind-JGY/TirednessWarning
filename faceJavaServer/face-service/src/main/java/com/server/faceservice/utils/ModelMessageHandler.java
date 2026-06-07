@@ -50,13 +50,15 @@ public class ModelMessageHandler {
         String fatigueRank = normalizeNumber(json.get("fatigueRank"));
         Object faceBox = json.get("faceBox");
         Object scores7 = json.get("scores7");
-        // Eye detection forwarding is disabled on main; develop keeps the full eye-alert workflow.
-        // String eyeStatus = json.getString("eyeStatus");
-        // Boolean eyeClosed = json.getBoolean("eyeClosed");
-        // String eyeClosedScore = normalizeScore(json.get("eyeClosedScore"));
-        // String eyeOpenScore = normalizeScore(json.get("eyeOpenScore"));
-        // Object eyeBoxes = json.get("eyeBoxes");
-        // Object eyeCheckedAt = json.get("eyeCheckedAt");
+        String eyeStatus = json.getString("eyeStatus");
+        Boolean eyeClosed = json.getBoolean("eyeClosed");
+        String eyeClosedScore = normalizeScore(json.get("eyeClosedScore"));
+        String eyeOpenScore = normalizeScore(json.get("eyeOpenScore"));
+        Object eyeBoxes = json.get("eyeBoxes");
+        Object eyeCheckedAt = json.get("eyeCheckedAt");
+        Boolean mouthOpen = json.getBoolean("mouthOpen");
+        String yawnScore = normalizeScore(json.get("yawnScore"));
+        Object mouthCheckedAt = json.get("mouthCheckedAt");
         String image = json.getString("image");
 
         WebMessage response = new WebMessage(
@@ -69,12 +71,15 @@ public class ModelMessageHandler {
                 fatigueRank,
                 faceBox,
                 scores7,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                eyeStatus,
+                eyeClosed,
+                eyeClosedScore,
+                eyeOpenScore,
+                eyeBoxes,
+                eyeCheckedAt,
+                mouthOpen,
+                yawnScore,
+                mouthCheckedAt,
                 System.currentTimeMillis(),
                 image
         );
@@ -134,6 +139,9 @@ class WebMessage {
     private final String eyeOpenScore;
     private final Object eyeBoxes;
     private final Object eyeCheckedAt;
+    private final Boolean mouthOpen;
+    private final String yawnScore;
+    private final Object mouthCheckedAt;
     private final long timestamp;
     private final String image;
 
@@ -141,6 +149,7 @@ class WebMessage {
                       String fatigueIndex, String fatigueRank, Object faceBox, Object scores7,
                       String eyeStatus, Boolean eyeClosed, String eyeClosedScore, String eyeOpenScore,
                       Object eyeBoxes, Object eyeCheckedAt,
+                      Boolean mouthOpen, String yawnScore, Object mouthCheckedAt,
                       long timestamp, String image) {
         this.userId = userId;
         this.status = status;
@@ -157,6 +166,9 @@ class WebMessage {
         this.eyeOpenScore = eyeOpenScore;
         this.eyeBoxes = eyeBoxes;
         this.eyeCheckedAt = eyeCheckedAt;
+        this.mouthOpen = mouthOpen;
+        this.yawnScore = yawnScore;
+        this.mouthCheckedAt = mouthCheckedAt;
         this.timestamp = timestamp;
         this.image = image;
     }
@@ -176,6 +188,9 @@ class WebMessage {
     public String getEyeOpenScore() { return eyeOpenScore; }
     public Object getEyeBoxes() { return eyeBoxes; }
     public Object getEyeCheckedAt() { return eyeCheckedAt; }
+    public Boolean getMouthOpen() { return mouthOpen; }
+    public String getYawnScore() { return yawnScore; }
+    public Object getMouthCheckedAt() { return mouthCheckedAt; }
     public long getTimestamp() { return timestamp; }
     public String getImage() { return image; }
 }

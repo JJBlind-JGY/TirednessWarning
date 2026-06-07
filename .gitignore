@@ -38,6 +38,7 @@ TirednessWarning-Release-Full.rar
 .idea/
 .vscode/
 *.iml
+AGENTS.md
 .DS_Store
 Thumbs.db
 
@@ -45,6 +46,7 @@ Thumbs.db
 # Dev logs
 # ========================
 vite-dev*.log
+docs/
 
 # ========================
 # Large data / models

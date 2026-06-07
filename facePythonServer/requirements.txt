@@ -10,3 +10,4 @@ pyyaml==6.0.2
 # MediaPipe FaceLandmarker (with blendshapes) - 替换 open-closed-eye.onnx 的闭眼检测
 # mediapipe 会附带拉 opencv-contrib-python，与上面的 opencv_python 有重叠，但两者共存不影响 import cv2 的使用
 mediapipe==0.10.35
+onnxruntime==1.22.0

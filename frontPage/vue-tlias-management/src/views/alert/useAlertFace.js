@@ -57,7 +57,7 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
   function setBindingState(binding, { connected, statusText }) { if (binding) { binding.faceConnected = connected; binding.faceStatusText = statusText } }
   function bumpStreamVersion(binding) { if (binding) binding.faceStreamVersion = Number(binding.faceStreamVersion || 0) + 1 }
   function isCameraStatus(status) { return Object.prototype.hasOwnProperty.call(FACE_STATUS_TEXT, status) }
-  function clearCurrentFacePrediction(binding) {
+  function clearCurrentFacePrediction(binding, { clearBehaviorHistory = true } = {}) {
     if (!binding) return
     binding.lastValidFaceEmotion = ''
     binding.lastValidFaceEmotionZh = ''
@@ -71,8 +71,19 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
     binding.eyeClosedScore = 0
     binding.eyeOpenScore = 0
     binding.eyeBoxes = []
-    binding.eyeSamples?.splice(0, binding.eyeSamples.length)
     binding.eyeLastValidAt = 0
+    binding.mouthOpen = null
+    binding.yawnScore = 0
+    binding.mouthOpenStartedAt = 0
+    binding.yawnActive = false
+    binding.yawnCountInWindow = 0
+    binding.behaviorClosedMs = 0
+    binding.behaviorYawnCount = 0
+    if (clearBehaviorHistory) {
+      binding.eyeSamples?.splice(0, binding.eyeSamples.length)
+      binding.mouthSamples?.splice(0, binding.mouthSamples.length)
+      binding.yawnEvents?.splice(0, binding.yawnEvents.length)
+    }
     binding.eyeClosedStartedAt = 0
     binding.eyeCurrentClosedStartedAt = 0
     binding.eyeContinuousClosedMs = 0
@@ -145,9 +156,8 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
       binding.faceScore = '--'
       binding.faceRate = '--'
       binding.faceRank = null
-      clearCurrentFacePrediction(binding)
-      // Eye detection alerts are disabled on main; develop keeps this workflow.
-      // updateEyeState?.(binding, payload)
+      clearCurrentFacePrediction(binding, { clearBehaviorHistory: false })
+      updateEyeState?.(binding, payload)
       binding.faceStopRequired = false
       updateFusionState?.(binding)
       evaluateWarning(binding)
@@ -167,8 +177,7 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning, upda
     binding.lastValidFaceScore = normalizeScore(payload.score)
     binding.faceAssistStreak = payload.emotion5 === 'normal' ? 0 : Number(binding.faceAssistStreak || 0) + 1
     binding.faceStopRequired = payload.emotion5 !== 'normal'
-    // Eye detection alerts are disabled on main; develop keeps this workflow.
-    // updateEyeState?.(binding, payload)
+    updateEyeState?.(binding, payload)
     maybeTriggerAbnormalSample?.(binding, payload)
     updateFusionState?.(binding)
     evaluateWarning(binding)

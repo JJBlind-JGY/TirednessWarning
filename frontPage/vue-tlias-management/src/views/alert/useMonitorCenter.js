@@ -31,10 +31,13 @@ const ABNORMAL_MIN_RATIO = 0.18
 const STABLE_TIE_MARGIN = 0.08
 const EMPTY_SEGMENTS_BEFORE_WAITING = 2
 const EYE_WINDOW_MS = 20000
+const BEHAVIOR_FATIGUE_CLOSED_MS = 10000
+const YAWN_HOLD_MS = 3000
 const EYE_DETAIL_CONTINUOUS_MS = 6000
 const EYE_MAIN_CONTINUOUS_MS = 12000
 const EYE_MAIN_ALERT_COOLDOWN_MS = 60000
 const EYE_MAX_SAMPLE_GAP_MS = 3500
+const BEHAVIOR_HISTORY_MS = STABLE_STATE_SEGMENT_MS * 2 + EYE_MAX_SAMPLE_GAP_MS
 const CONFIG_LOAD_RETRY_COUNT = 5
 const CONFIG_LOAD_RETRY_DELAY_MS = 600
 let fusionRefreshTimer = null
@@ -195,6 +198,8 @@ function createBinding(seed = 1) {
     eyeStatus: 'waiting', eyeStatusText: EYE_TEXT.waiting, eyeClosed: null, eyeClosedScore: 0, eyeOpenScore: 0, eyeBoxes: [], eyeLastValidAt: 0,
     eyeSamples: [],
     eyeClosedStartedAt: 0, eyeCurrentClosedStartedAt: 0, eyeMaxContinuousClosedMs: 0, eyeTotalClosedMs: 0, eyeContinuousClosedMs: 0,
+    mouthOpen: null, yawnScore: 0, mouthSamples: [], mouthOpenStartedAt: 0, yawnActive: false, yawnEvents: [], yawnCountInWindow: 0,
+    behaviorClosedMs: 0, behaviorYawnCount: 0,
     eyeDetailPopupActive: false, eyeDetailPopupWindowId: 0, eyeDetailPopupAt: 0, eyePopupLevel: '', eyePopupDismissedAt: 0,
     eyeOpenStartedAt: 0, eyeContinuousOpenMs: 0, eyeMainAlertActive: false, eyeMainAlertWindowId: 0, eyeLastAlertAt: 0, eyeClosedAlertStage: '',
     videoUploading: false, uploadPercent: 0, localVideoUrl: '', videoWidth: 0, videoHeight: 0,
@@ -506,13 +511,22 @@ function resetEyeAlertStage(binding) {
 }
 
 function trimEyeSamples(binding, now = Date.now()) {
-  const cutoff = now - EYE_WINDOW_MS
+  const cutoff = now - BEHAVIOR_HISTORY_MS
   binding.eyeSamples.splice(0, binding.eyeSamples.length, ...binding.eyeSamples.filter((sample) => Number(sample.ts || 0) >= cutoff))
 }
 
 function summarizeEyeWindow(binding, now = Date.now()) {
   trimEyeSamples(binding, now)
-  const samples = [...binding.eyeSamples].sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0))
+  const cutoff = now - EYE_WINDOW_MS
+  let previousSample = null
+  const recentSamples = []
+  ;[...binding.eyeSamples].sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0)).forEach((sample) => {
+    const ts = Number(sample.ts || 0)
+    if (!ts || ts > now) return
+    if (ts < cutoff) previousSample = sample
+    else recentSamples.push(sample)
+  })
+  const samples = previousSample ? [{ ...previousSample, ts: cutoff }, ...recentSamples] : recentSamples
   let totalClosedMs = 0
   let maxContinuousClosedMs = 0
   let currentClosedMs = 0
@@ -559,6 +573,50 @@ function summarizeEyeWindow(binding, now = Date.now()) {
   binding.eyeTotalClosedMs = totalClosedMs
 }
 
+function trimBehaviorSamples(binding, now = Date.now()) {
+  const cutoff = now - BEHAVIOR_HISTORY_MS
+  binding.mouthSamples.splice(0, binding.mouthSamples.length, ...binding.mouthSamples.filter((sample) => Number(sample.ts || 0) >= cutoff))
+  binding.yawnEvents.splice(0, binding.yawnEvents.length, ...binding.yawnEvents.filter((ts) => Number(ts || 0) >= cutoff))
+}
+
+function updateMouthState(binding, payload = {}, now = Date.now()) {
+  const hasMouthField = Object.prototype.hasOwnProperty.call(payload, 'mouthOpen')
+  const hasMouthState = payload.mouthOpen === true || payload.mouthOpen === false
+  binding.yawnScore = parsePercent(payload.yawnScore)
+  if (!hasMouthState) {
+    if (hasMouthField || (payload.status && payload.status !== 'ok')) {
+      binding.mouthOpen = null
+      binding.mouthOpenStartedAt = 0
+      binding.yawnActive = false
+      binding.mouthSamples.push({ ts: now, open: null })
+    }
+    trimBehaviorSamples(binding, now)
+    binding.yawnCountInWindow = binding.yawnEvents.filter((ts) => now - Number(ts || 0) <= EYE_WINDOW_MS).length
+    return
+  }
+
+  const isOpen = payload.mouthOpen === true
+  binding.mouthOpen = isOpen
+  binding.mouthSamples.push({ ts: now, open: isOpen })
+  if (isOpen) {
+    if (!binding.mouthOpenStartedAt) binding.mouthOpenStartedAt = now
+    if (!binding.yawnActive && now - Number(binding.mouthOpenStartedAt || now) >= YAWN_HOLD_MS) {
+      binding.yawnEvents.push(now)
+      binding.yawnActive = true
+    }
+  } else {
+    binding.mouthOpenStartedAt = 0
+    binding.yawnActive = false
+  }
+  trimBehaviorSamples(binding, now)
+  binding.yawnCountInWindow = binding.yawnEvents.filter((ts) => now - Number(ts || 0) <= EYE_WINDOW_MS).length
+}
+
+function refreshMouthWindow(binding, now = Date.now()) {
+  trimBehaviorSamples(binding, now)
+  binding.yawnCountInWindow = binding.yawnEvents.filter((ts) => now - Number(ts || 0) <= EYE_WINDOW_MS).length
+}
+
 function maybeTriggerEyeAlerts(binding, now = Date.now()) {
   if (binding.eyeMaxContinuousClosedMs < EYE_DETAIL_CONTINUOUS_MS) {
     resetEyeAlertStage(binding)
@@ -592,9 +650,11 @@ function maybeTriggerEyeAlerts(binding, now = Date.now()) {
 
 function updateEyeState(binding, payload = {}) {
   if (!binding) return
-  const now = Number(payload.timestamp || payload.eyeCheckedAt || Date.now())
+  const now = Number(payload.timestamp || payload.eyeCheckedAt || payload.mouthCheckedAt || Date.now())
+  updateMouthState(binding, payload, now)
   const closedScore = parsePercent(payload.eyeClosedScore)
   const openScore = parsePercent(payload.eyeOpenScore)
+  const hasEyeField = Object.prototype.hasOwnProperty.call(payload, 'eyeClosed') || Object.prototype.hasOwnProperty.call(payload, 'eyeStatus')
   const hasValidEye = payload.status === 'ok' && (payload.eyeClosed === true || payload.eyeClosed === false) && ['open', 'closed'].includes(payload.eyeStatus)
 
   binding.eyeStatus = payload.eyeStatus || 'waiting'
@@ -605,8 +665,8 @@ function updateEyeState(binding, payload = {}) {
   binding.eyeBoxes = Array.isArray(payload.eyeBoxes) ? payload.eyeBoxes : []
 
   if (!hasValidEye) {
-    summarizeEyeWindow(binding, Date.now())
-    maybeTriggerEyeAlerts(binding, Date.now())
+    if (hasEyeField || (payload.status && payload.status !== 'ok')) binding.eyeSamples.push({ ts: now, closed: false, closedScore: 0, openScore: 0 })
+    summarizeEyeWindow(binding, now)
     return
   }
 
@@ -614,7 +674,6 @@ function updateEyeState(binding, payload = {}) {
   binding.eyeLastValidAt = now
   binding.eyeSamples.push({ ts: now, closed: isClosedSample, closedScore, openScore })
   summarizeEyeWindow(binding, now)
-  maybeTriggerEyeAlerts(binding, now)
 }
 
 function normalizeEmotionKey(emotion) {
@@ -645,6 +704,8 @@ function clearHistorySamples(binding, source = '') {
   if (!source || source === 'face') {
     binding.lastRecordedFaceSampleAt = 0
     binding.eyeSamples.splice(0, binding.eyeSamples.length)
+    binding.mouthSamples.splice(0, binding.mouthSamples.length)
+    binding.yawnEvents.splice(0, binding.yawnEvents.length)
     binding.eyeStatus = 'waiting'
     binding.eyeStatusText = EYE_TEXT.waiting
     binding.eyeClosed = null
@@ -652,6 +713,13 @@ function clearHistorySamples(binding, source = '') {
     binding.eyeOpenScore = 0
     binding.eyeBoxes = []
     binding.eyeLastValidAt = 0
+    binding.mouthOpen = null
+    binding.yawnScore = 0
+    binding.mouthOpenStartedAt = 0
+    binding.yawnActive = false
+    binding.yawnCountInWindow = 0
+    binding.behaviorClosedMs = 0
+    binding.behaviorYawnCount = 0
     binding.eyeClosedStartedAt = 0
     binding.eyeCurrentClosedStartedAt = 0
     binding.eyeMaxContinuousClosedMs = 0
@@ -732,8 +800,83 @@ function getSampleCounts(samples) {
   }, { eeg: 0, face: 0 })
 }
 
-function chooseStableSegmentEmotion(binding, samples) {
+function summarizeTimedStateSamples(samplesSource, segmentStart, segmentEnd, stateKey, maxGapMs = EYE_MAX_SAMPLE_GAP_MS) {
+  let previousSample = null
+  const recentSamples = []
+  ;[...samplesSource].sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0)).forEach((sample) => {
+    const ts = Number(sample.ts || 0)
+    if (!ts || ts >= segmentEnd) return
+    if (ts < segmentStart) previousSample = sample
+    else recentSamples.push(sample)
+  })
+  const samples = previousSample ? [{ ...previousSample, ts: segmentStart }, ...recentSamples] : recentSamples
+  return samples.reduce((duration, sample, index) => {
+    if (sample[stateKey] !== true) return duration
+    const ts = Number(sample.ts || 0)
+    const nextTs = index + 1 < samples.length ? Number(samples[index + 1].ts || segmentEnd) : segmentEnd
+    const start = Math.max(segmentStart, ts)
+    const end = Math.min(segmentEnd, nextTs, ts + maxGapMs)
+    return end > start ? duration + (end - start) : duration
+  }, 0)
+}
+
+function countContinuousStateRuns(samplesSource, segmentStart, segmentEnd, stateKey, minDurationMs, maxGapMs = EYE_MAX_SAMPLE_GAP_MS) {
+  let previousSample = null
+  const recentSamples = []
+  ;[...samplesSource].sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0)).forEach((sample) => {
+    const ts = Number(sample.ts || 0)
+    if (!ts || ts >= segmentEnd) return
+    if (ts < segmentStart) previousSample = sample
+    else recentSamples.push(sample)
+  })
+  const samples = previousSample ? [{ ...previousSample, ts: segmentStart }, ...recentSamples] : recentSamples
+  let count = 0
+  let runStart = null
+  let runEnd = null
+  let lastTrueTs = null
+  const closeRun = (observedEnd = false) => {
+    if (runStart != null && runEnd != null && lastTrueTs != null) {
+      const observedDuration = lastTrueTs - runStart
+      const inferredDuration = runEnd - runStart
+      if (observedDuration >= minDurationMs || (observedEnd && inferredDuration >= minDurationMs)) count += 1
+    }
+    runStart = null
+    runEnd = null
+    lastTrueTs = null
+  }
+  samples.forEach((sample, index) => {
+    const ts = Number(sample.ts || 0)
+    const nextTs = index + 1 < samples.length ? Number(samples[index + 1].ts || segmentEnd) : segmentEnd
+    const start = Math.max(segmentStart, ts)
+    const end = Math.min(segmentEnd, nextTs, ts + maxGapMs)
+    if (end <= start) return
+    if (sample[stateKey] === true) {
+      if (runStart != null && runEnd != null && start > runEnd) closeRun(false)
+      if (runStart == null) runStart = start
+      runEnd = end
+      lastTrueTs = Math.max(start, ts)
+      return
+    }
+    closeRun(runEnd != null && start <= runEnd)
+  })
+  closeRun(false)
+  return count
+}
+
+function summarizeBehaviorSegment(binding, segmentStart, segmentEnd) {
+  const closedMs = summarizeTimedStateSamples(binding.eyeSamples || [], segmentStart, segmentEnd, 'closed')
+  const yawnCount = countContinuousStateRuns(binding.mouthSamples || [], segmentStart, segmentEnd, 'open', YAWN_HOLD_MS)
+  return { closedMs, yawnCount }
+}
+
+function chooseStableSegmentEmotion(binding, samples, segmentStart = 0, segmentEnd = 0) {
   const counts = getSampleCounts(samples)
+  if (segmentStart && segmentEnd) {
+    const behavior = summarizeBehaviorSegment(binding, segmentStart, segmentEnd)
+    if (behavior.closedMs >= BEHAVIOR_FATIGUE_CLOSED_MS || behavior.yawnCount >= 1) {
+      return { commit: true, counts, emotion: 'fatigue', confidence: 1, source: 'behavior', behavior }
+    }
+  }
   if (samples.length < SEGMENT_MIN_SAMPLES) {
     return { commit: false, counts, emotion: binding.stableEmotion || 'normal', confidence: binding.stableConfidence / 100, source: 'insufficient' }
   }
@@ -767,6 +910,8 @@ function commitStableSegment(binding, result, now) {
   binding.stableUpdatedAt = now
   binding.stableConfidence = Math.round(Math.min(1, Math.max(0, Number(result.confidence || 0))) * 100)
   binding.stableSampleCounts = result.counts || { eeg: 0, face: 0 }
+  binding.behaviorClosedMs = Number(result.behavior?.closedMs || 0)
+  binding.behaviorYawnCount = Number(result.behavior?.yawnCount || 0)
   binding.fusionEmotion = binding.stableEmotion
   binding.fusionEmotionZh = binding.stableEmotionZh
   binding.emotion = binding.stableEmotion
@@ -800,9 +945,9 @@ function settleStableSegments(binding, now = Date.now()) {
     const segmentEnd = Number(binding.stableSegmentStartedAt) + STABLE_STATE_SEGMENT_MS
     const segmentSamples = binding.stateSamples.filter((sample) => Number(sample.ts || 0) < segmentEnd)
     const remainingSamples = binding.stateSamples.filter((sample) => Number(sample.ts || 0) >= segmentEnd)
-    const result = chooseStableSegmentEmotion(binding, segmentSamples)
+    const result = chooseStableSegmentEmotion(binding, segmentSamples, Number(binding.stableSegmentStartedAt), segmentEnd)
 
-    if (!segmentSamples.length) {
+    if (!segmentSamples.length && result.source !== 'behavior') {
       binding.emptyStableSegments = Number(binding.emptyStableSegments || 0) + 1
       if (binding.emptyStableSegments >= EMPTY_SEGMENTS_BEFORE_WAITING) resetCommittedStateToWaiting(binding)
     } else {
@@ -886,9 +1031,8 @@ function refreshFusionStates() {
       binding.lastValidFaceScore = 0
       binding.faceAssistStreak = 0
     }
-    // Eye detection alerts are disabled on main; develop keeps this workflow.
-    // summarizeEyeWindow(binding, now)
-    // maybeTriggerEyeAlerts(binding, now)
+    summarizeEyeWindow(binding, now)
+    refreshMouthWindow(binding, now)
     updateFusionState(binding)
     maybeTriggerFusionAbnormalSample(binding, now)
     maybeTriggerNormalSample(binding, now)
@@ -913,8 +1057,7 @@ const faceMonitor = createFaceMonitor({
   updateBindingPerson,
   evaluateWarning,
   updateFusionState,
-  // Eye detection alerts are disabled on main; develop keeps updateEyeState wired in.
-  // updateEyeState,
+  updateEyeState,
   maybeTriggerAbnormalSample: null
 })
 

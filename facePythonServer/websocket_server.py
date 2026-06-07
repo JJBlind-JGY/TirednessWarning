@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 import yaml
 import websockets
+import numpy as np
 
 from face_emotion_model import DEFAULT_EMOTION_MODEL, DEFAULT_EYE_MODEL, DEFAULT_YUNET_MODEL, YuNetEmotiEffRecognizer
 
@@ -33,14 +34,16 @@ def resolve_local_path(path):
 
 
 # === MediaPipe FaceLandmarker 替换 open-closed-eye.onnx 的闭眼检测 ====================
-# 设计目标: 改动最小且可回退。
+# 设计目标: 改动最小，MediaPipe 不可用时禁用闭眼检测。
 # - 不修改 face_emotion_model.YuNetEmotiEffRecognizer 的源码
 # - 仅在 main 里运行时把 recognizer._predict_eye_state 替换成 MediaPipe 版本
 # - 替换函数返回的 dict 与原方法接口完全兼容（status/closed/closed_score/open_score/boxes）
-# - 加载失败 / 模型缺失 / mediapipe 没装时自动 fallback 到原 ONNX 模型
+# - 加载失败 / 模型缺失 / mediapipe 没装时禁用闭眼检测，不回退到旧 ONNX 模型
 import cv2  # face_emotion_model 已经依赖 cv2，显式 import 让本文件自包含
 
 DEFAULT_MP_MODEL = os.path.join(BASE_DIR, "models", "face_landmarker.task")
+DEFAULT_YAWN_MODEL = os.path.join(BASE_DIR, "models", "yawn_model_80_lite.onnx")
+yawn_detector = None
 
 
 def _load_mediapipe_landmarker(model_path):
@@ -123,15 +126,15 @@ def _make_mediapipe_eye_state_fn(landmarker, mp_module, blink_threshold=0.50):
 def _patch_recognizer_with_mediapipe(recognizer, model_path, blink_threshold):
     """把 recognizer._predict_eye_state 换成 MediaPipe 实现。成功返回 True。"""
     if not os.path.exists(model_path):
-        print(f"[INFO] MediaPipe model not found ({model_path}); using original ONNX eye model.")
+        print(f"[WARN] MediaPipe model not found ({model_path}); eye detection disabled.")
         return False
     try:
         landmarker, mp_module = _load_mediapipe_landmarker(model_path)
     except ImportError as exc:
-        print(f"[WARN] mediapipe package not installed ({exc}); using original ONNX eye model.")
+        print(f"[WARN] mediapipe package not installed ({exc}); eye detection disabled.")
         return False
     except Exception as exc:
-        print(f"[WARN] MediaPipe load failed ({exc}); using original ONNX eye model.")
+        print(f"[WARN] MediaPipe load failed ({exc}); eye detection disabled.")
         return False
 
     recognizer._predict_eye_state = _make_mediapipe_eye_state_fn(
@@ -146,6 +149,63 @@ def _disable_eye_state_fn(image, face_box, landmarks):
     """Eye detection is disabled on main; develop keeps the full eye-alert feature."""
     return {"status": "disabled", "closed": None,
             "closed_score": 0.0, "open_score": 0.0, "boxes": []}
+
+
+class HippoYDMouthOpenDetector:
+    def __init__(self, model_path, threshold=0.80):
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"HippoYD yawn model not found: {model_path}")
+        import onnxruntime as ort
+
+        session_options = ort.SessionOptions()
+        session_options.log_severity_level = 3
+        self.session = ort.InferenceSession(
+            model_path,
+            sess_options=session_options,
+            providers=["CPUExecutionProvider"],
+        )
+        yawn_input = self.session.get_inputs()[0]
+        self.input_name = yawn_input.name
+        self.output_name = self.session.get_outputs()[0].name
+        self.input_height = int(yawn_input.shape[1])
+        self.input_width = int(yawn_input.shape[2])
+        self.threshold = float(threshold)
+        self.lock = threading.Lock()
+
+    def predict_from_bytes(self, frame_data, face_box):
+        image = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+        if image is None or not face_box:
+            return {"mouthOpen": None, "yawnScore": 0.0}
+        score = self._predict_score(image, face_box)
+        return {"mouthOpen": bool(score >= self.threshold), "yawnScore": score}
+
+    def _predict_score(self, frame_bgr, face_box):
+        mouth_crop = self._crop_mouth_region(frame_bgr, face_box)
+        if mouth_crop is None:
+            return 0.0
+        resized = cv2.resize(mouth_crop, (self.input_width, self.input_height), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        blob = (gray.astype(np.float32) / 255.0).reshape(1, self.input_height, self.input_width, 1)
+        with self.lock:
+            output = self.session.run([self.output_name], {self.input_name: blob})[0]
+        return float(np.squeeze(output))
+
+    @staticmethod
+    def _crop_mouth_region(frame_bgr, face_box):
+        x1, y1, x2, y2 = [int(value) for value in face_box]
+        h, w = frame_bgr.shape[:2]
+        face_w = x2 - x1
+        face_h = y2 - y1
+        if face_w <= 0 or face_h <= 0:
+            return None
+
+        mx1 = max(0, int(x1 + face_w * 0.12))
+        mx2 = min(w, int(x2 - face_w * 0.12))
+        my1 = max(0, int(y1 + face_h * 0.48))
+        my2 = min(h, int(y2 + face_h * 0.08))
+        if mx2 - mx1 < 12 or my2 - my1 < 12:
+            return None
+        return frame_bgr[my1:my2, mx1:mx2]
 
 
 class ModelPool:
@@ -279,6 +339,14 @@ async def process_tasks():
         if result.image_bytes is not None:
             image_b64 = base64.b64encode(result.image_bytes).decode('utf-8')
 
+        mouth_result = {"mouthOpen": None, "yawnScore": 0.0}
+        if yawn_detector is not None:
+            try:
+                mouth_result = yawn_detector.predict_from_bytes(frame_data, result.face_box)
+            except Exception as exc:
+                print(f"[YAWN ERROR] {exc}")
+
+        checked_at = int(time.time() * 1000)
         response = {
             "status": result.status,
             "userId": user_id,
@@ -293,14 +361,15 @@ async def process_tasks():
             "fatigueRank": result.fatigue_rank,
             "faceBox": result.face_box,
             "scores7": result.scores7,
-            # Eye detection fields are intentionally disabled on main.
-            # The develop branch preserves the full eye-closed alert workflow.
-            # "eyeStatus": result.eye_status,
-            # "eyeClosed": result.eye_closed,
-            # "eyeClosedScore": round(result.eye_closed_score * 100, 3),
-            # "eyeOpenScore": round(result.eye_open_score * 100, 3),
-            # "eyeBoxes": result.eye_boxes,
-            # "eyeCheckedAt": int(time.time() * 1000),
+            "eyeStatus": result.eye_status,
+            "eyeClosed": result.eye_closed,
+            "eyeClosedScore": round(result.eye_closed_score * 100, 3),
+            "eyeOpenScore": round(result.eye_open_score * 100, 3),
+            "eyeBoxes": result.eye_boxes,
+            "eyeCheckedAt": checked_at,
+            "mouthOpen": mouth_result.get("mouthOpen"),
+            "yawnScore": round(float(mouth_result.get("yawnScore") or 0.0) * 100, 3),
+            "mouthCheckedAt": checked_at,
             "modelQueuedMs": round(max(0, time.time() - queued_at) * 1000, 3),
             "modelInferenceMs": round(inference_ms, 3),
             "image": image_b64,
@@ -567,17 +636,21 @@ if __name__ == "__main__":
         eye_closed_threshold=float(config.get('eye_closed_threshold', 0.65)),
     )
 
-    # === 接入 MediaPipe 替换闭眼检测（失败 fallback 到原 ONNX）===
-    # Eye detection is disabled on main to keep reports stable.
-    # develop preserves the original MediaPipe/ONNX eye-closed workflow.
+    # === 接入 MediaPipe 替换闭眼检测（失败则禁用闭眼，不回退旧 ONNX）===
     recognizer._predict_eye_state = _disable_eye_state_fn
-    print("[INFO] eye detection disabled on main; develop keeps the full eye-alert feature.")
-    # if config.get('use_mediapipe_eye', True):
-    #     _mp_model_path = resolve_local_path(config.get('mediapipe_eye_model', DEFAULT_MP_MODEL))
-    #     _mp_blink_threshold = float(config.get('mp_blink_threshold', 0.50))
-    #     _patch_recognizer_with_mediapipe(recognizer, _mp_model_path, _mp_blink_threshold)
-    # else:
-    #     print("[INFO] use_mediapipe_eye=false; using original ONNX eye model.")
+    _mp_model_path = resolve_local_path(config.get('mediapipe_eye_model', DEFAULT_MP_MODEL))
+    _mp_blink_threshold = float(config.get('mp_blink_threshold', 0.50))
+    _patch_recognizer_with_mediapipe(recognizer, _mp_model_path, _mp_blink_threshold)
+
+    try:
+        _yawn_model_path = resolve_local_path(config.get('yawn_model', DEFAULT_YAWN_MODEL))
+        _yawn_threshold = float(config.get('yawn_threshold', 0.80))
+        yawn_detector = HippoYDMouthOpenDetector(_yawn_model_path, _yawn_threshold)
+        print(f"[INFO] HippoYD mouth-open detection enabled: {_yawn_model_path}")
+        print(f"[INFO]   yawn_threshold = {_yawn_threshold}")
+    except Exception as exc:
+        yawn_detector = None
+        print(f"[WARN] HippoYD mouth-open detection disabled ({exc}).")
     # 创建一个线程池执行器
     # executor = ThreadPoolExecutor(max_workers=10)
     #

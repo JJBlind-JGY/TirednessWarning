@@ -7,6 +7,10 @@ executor_workers: 4
 yunet_model: ./models/face_detection_yunet_2023mar.onnx
 emotion_model: ./models/enet_b2_7.onnx
 eye_model: ./models/open-closed-eye.onnx
+mediapipe_eye_model: ./models/face_landmarker.task
+mp_blink_threshold: 0.50
+yawn_model: ./models/yawn_model_80_lite.onnx
+yawn_threshold: 0.80
 emotion_input_size: 260
 face_score_threshold: 0.7
 eye_closed_threshold: 0.65
