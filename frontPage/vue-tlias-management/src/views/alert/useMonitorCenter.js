@@ -2,7 +2,10 @@
 import { ElMessage, ElNotification } from 'element-plus'
 import { createEegMonitor } from './useAlertEeg'
 import { createFaceMonitor } from './useAlertFace'
-import { summarizeBehaviorSegment as summarizeBehaviorSamples } from './behaviorFusion'
+import {
+  selectStateWindowSamples,
+  summarizeBehaviorSegment as summarizeBehaviorSamples
+} from './behaviorFusion'
 
 const PERSONNEL_STORAGE_KEY = 'alert-personnel-options'
 const DEVICE_STORAGE_KEY = 'alert-device-options'
@@ -32,8 +35,8 @@ const ABNORMAL_MIN_RATIO = 0.18
 const STABLE_TIE_MARGIN = 0.08
 const EMPTY_SEGMENTS_BEFORE_WAITING = 2
 const EYE_WINDOW_MS = 20000
-const BEHAVIOR_FATIGUE_CLOSED_MS = 10000
-const YAWN_HOLD_MS = 3000
+const BEHAVIOR_FATIGUE_CLOSED_MS = 8000
+const YAWN_HOLD_MS = 5000
 const EYE_DETAIL_CONTINUOUS_MS = 6000
 const EYE_MAIN_CONTINUOUS_MS = 12000
 const EYE_MAIN_ALERT_COOLDOWN_MS = 60000
@@ -191,6 +194,7 @@ function createBinding(seed = 1) {
     stateSamples: [], committedEmotion: '', committedEmotionZh: '', stableEmotion: 'normal', stableEmotionZh: EMOTION_ZH.normal,
     stableSegmentStartedAt: 0, stableUpdatedAt: 0, stableConfidence: 0, stableWindowMs: STABLE_STATE_SEGMENT_MS,
     stableSampleCounts: { eeg: 0, face: 0 }, emptyStableSegments: 0,
+    lastFatigueDiagnosticAt: 0,
     analysisTime: '', calibrationProgress: 0, baselineResetReason: '', baselineResetAt: '',
     indices: { anxiety_idx: 0, stress_idx: 0, fatigue_idx: 0, weakness_idx: 0 }, probs: {},
     bandSnapshot: { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }, rawWaveBuffer: [], waveScale: 1,
@@ -303,7 +307,8 @@ function normalizeAlertLog(item = {}) {
     level: item.level || 'warning',
     type: item.type || 'abnormal_start',
     time: item.time || formatAlertTime(timestamp),
-    message: item.message || ''
+    message: item.message || '',
+    diagnostics: item.diagnostics || null
   }
 }
 
@@ -319,7 +324,11 @@ async function loadAlertHistory(date = getLocalDateKey()) {
     const response = await fetch(endpoint)
     if (!response.ok) throw new Error(`alert log load failed: ${response.status}`)
     const payload = await response.json()
-    const logs = Array.isArray(payload?.data) ? payload.data.map(normalizeAlertLog) : []
+    const logs = Array.isArray(payload?.data)
+      ? payload.data
+        .filter((item) => item?.type !== 'fatigue_diagnostic')
+        .map(normalizeAlertLog)
+      : []
     state.alertHistoryDate = date
     state.alertHistory.splice(0, state.alertHistory.length, ...logs)
     sortAlertHistory()
@@ -351,7 +360,8 @@ async function persistAlertHistoryItem(item) {
         device: item.device,
         level: item.level,
         type: item.type,
-        message: item.message
+        message: item.message,
+        diagnostics: item.diagnostics
       })
     })
     if (!response.ok) throw new Error(`alert log save failed: ${response.status}`)
@@ -360,7 +370,7 @@ async function persistAlertHistoryItem(item) {
   }
 }
 
-function pushAlertHistory(binding, level, message = getWarningText(binding), type = 'abnormal_start') {
+function pushAlertHistory(binding, level, message = getWarningText(binding), type = 'abnormal_start', diagnostics = null) {
   ensureTodayAlertHistory({ reload: false })
   const timestamp = Date.now()
   const item = normalizeAlertLog({
@@ -372,10 +382,76 @@ function pushAlertHistory(binding, level, message = getWarningText(binding), typ
     device: getDeviceLabel(binding.workerId),
     level,
     type,
-    message
+    message,
+    diagnostics
   })
   state.alertHistory.unshift(item)
   void persistAlertHistoryItem(item)
+}
+
+function getFatigueTriggerReason(source, behavior) {
+  const eyeTriggered = Number(behavior?.maxContinuousClosedMs || 0) >= BEHAVIOR_FATIGUE_CLOSED_MS
+  const yawnTriggered = Number(behavior?.yawnCount || 0) >= 1
+  if (source !== 'behavior') return `fusion_${source || 'unknown'}`
+  if (eyeTriggered && yawnTriggered) return 'eye_closed_and_yawn'
+  if (eyeTriggered) return 'eye_closed'
+  if (yawnTriggered) return 'yawn'
+  return 'behavior_unknown'
+}
+
+function buildFatigueDiagnostics(binding, result, windowStart, windowEnd) {
+  const behavior = result.behavior || summarizeBehaviorSegment(binding, windowStart, windowEnd)
+  return {
+    version: 2,
+    triggerSource: result.source || 'unknown',
+    triggerReason: getFatigueTriggerReason(result.source, behavior),
+    windowStart,
+    windowEnd,
+    windowMs: windowEnd - windowStart,
+    thresholds: {
+      eyeClosedContinuousMs: BEHAVIOR_FATIGUE_CLOSED_MS,
+      yawnCount: 1,
+      yawnHoldMs: YAWN_HOLD_MS,
+      maxSampleGapMs: EYE_MAX_SAMPLE_GAP_MS
+    },
+    summary: {
+      eyeClosedTotalMs: Number(behavior.closedMs || 0),
+      eyeClosedMaxContinuousMs: Number(behavior.maxContinuousClosedMs || 0),
+      yawnCount: Number(behavior.yawnCount || 0),
+      eegSampleCount: Number(result.counts?.eeg || 0),
+      faceSampleCount: Number(result.counts?.face || 0),
+      confidence: Number(result.confidence || 0)
+    },
+    eyeSamples: selectStateWindowSamples(binding.eyeSamples || [], windowStart, windowEnd, 'closed', ['closedScore', 'openScore']),
+    mouthSamples: selectStateWindowSamples(binding.mouthSamples || [], windowStart, windowEnd, 'open', ['yawnScore'])
+  }
+}
+
+function persistFatigueDiagnostic(binding, result, windowStart, windowEnd) {
+  if (Number(binding.lastFatigueDiagnosticAt || 0) === windowEnd) return
+  binding.lastFatigueDiagnosticAt = windowEnd
+  const diagnostics = buildFatigueDiagnostics(binding, result, windowStart, windowEnd)
+  const reasonText = diagnostics.triggerReason === 'eye_closed'
+    ? '闭眼检测'
+    : diagnostics.triggerReason === 'yawn'
+      ? '打哈欠检测'
+      : diagnostics.triggerReason === 'eye_closed_and_yawn'
+        ? '闭眼和打哈欠检测'
+        : '融合状态判定'
+  const item = normalizeAlertLog({
+    id: `${binding.id}-${windowEnd}-fatigue-diagnostic`,
+    date: getLocalDateKey(windowEnd),
+    timestamp: windowEnd,
+    personName: binding.personName || '未绑定人员',
+    personId: binding.personId || '',
+    device: getDeviceLabel(binding.workerId),
+    level: 'warning',
+    type: 'fatigue_diagnostic',
+    message: `疲劳诊断记录：触发来源为${reasonText}`,
+    diagnostics
+  })
+  void persistAlertHistoryItem(item)
+  console.info('[fatigue diagnostic]', item)
 }
 
 async function captureSample(binding, payload = {}) {
@@ -589,7 +665,7 @@ function updateMouthState(binding, payload = {}, now = Date.now()) {
       binding.mouthOpen = null
       binding.mouthOpenStartedAt = 0
       binding.yawnActive = false
-      binding.mouthSamples.push({ ts: now, open: null })
+      binding.mouthSamples.push({ ts: now, open: null, yawnScore: binding.yawnScore })
     }
     trimBehaviorSamples(binding, now)
     binding.yawnCountInWindow = binding.yawnEvents.filter((ts) => now - Number(ts || 0) <= EYE_WINDOW_MS).length
@@ -598,7 +674,7 @@ function updateMouthState(binding, payload = {}, now = Date.now()) {
 
   const isOpen = payload.mouthOpen === true
   binding.mouthOpen = isOpen
-  binding.mouthSamples.push({ ts: now, open: isOpen })
+  binding.mouthSamples.push({ ts: now, open: isOpen, yawnScore: binding.yawnScore })
   if (isOpen) {
     if (!binding.mouthOpenStartedAt) binding.mouthOpenStartedAt = now
     if (!binding.yawnActive && now - Number(binding.mouthOpenStartedAt || now) >= YAWN_HOLD_MS) {
@@ -813,9 +889,9 @@ function summarizeBehaviorSegment(binding, segmentStart, segmentEnd) {
 
 function chooseStableSegmentEmotion(binding, samples, segmentStart = 0, segmentEnd = 0) {
   const counts = getSampleCounts(samples)
+  const behavior = segmentStart && segmentEnd ? summarizeBehaviorSegment(binding, segmentStart, segmentEnd) : null
   if (segmentStart && segmentEnd) {
-    const behavior = summarizeBehaviorSegment(binding, segmentStart, segmentEnd)
-    if (behavior.closedMs >= BEHAVIOR_FATIGUE_CLOSED_MS || behavior.yawnCount >= 1) {
+    if (behavior.maxContinuousClosedMs >= BEHAVIOR_FATIGUE_CLOSED_MS || behavior.yawnCount >= 1) {
       return { commit: true, counts, emotion: 'fatigue', confidence: 1, source: 'behavior', behavior }
     }
   }
@@ -833,17 +909,19 @@ function chooseStableSegmentEmotion(binding, samples, segmentStart = 0, segmentE
   })).filter((item) => item.count >= ABNORMAL_MIN_COUNT && item.ratio >= ABNORMAL_MIN_RATIO)
     .sort((a, b) => b.ratio - a.ratio || b.score - a.score)
   const selected = keepPreviousOnCloseRace(binding, ranked)
-  if (selected) return { commit: true, counts, emotion: selected.emotion, confidence: selected.ratio, source: 'segment' }
+  if (selected) return { commit: true, counts, emotion: selected.emotion, confidence: selected.ratio, source: 'segment', behavior }
   return {
     commit: true,
     counts,
     emotion: 'normal',
     confidence: Number(summary.weights.normal || 0) / denominator,
-    source: 'segment'
+    source: 'segment',
+    behavior
   }
 }
 
-function commitStableSegment(binding, result, now) {
+function commitStableSegment(binding, result, now, segmentStart = now - STABLE_STATE_SEGMENT_MS) {
+  const previousEmotion = binding.stableEmotion
   const emotion = normalizeEmotionKey(result.emotion)
   binding.committedEmotion = emotion
   binding.committedEmotionZh = EMOTION_ZH[emotion] || EMOTION_ZH.normal
@@ -852,13 +930,16 @@ function commitStableSegment(binding, result, now) {
   binding.stableUpdatedAt = now
   binding.stableConfidence = Math.round(Math.min(1, Math.max(0, Number(result.confidence || 0))) * 100)
   binding.stableSampleCounts = result.counts || { eeg: 0, face: 0 }
-  binding.behaviorClosedMs = Number(result.behavior?.closedMs || 0)
+  binding.behaviorClosedMs = Number(result.behavior?.maxContinuousClosedMs || 0)
   binding.behaviorYawnCount = Number(result.behavior?.yawnCount || 0)
   binding.fusionEmotion = binding.stableEmotion
   binding.fusionEmotionZh = binding.stableEmotionZh
   binding.emotion = binding.stableEmotion
   binding.emotionZh = binding.stableEmotionZh
   binding.fusionSource = result.source || 'segment'
+  if (emotion === 'fatigue' && previousEmotion !== 'fatigue') {
+    persistFatigueDiagnostic(binding, result, segmentStart, now)
+  }
 }
 
 function resetCommittedStateToWaiting(binding) {
@@ -895,7 +976,7 @@ function settleStableSegments(binding, now = Date.now()) {
     } else {
       binding.emptyStableSegments = 0
       if (result.commit) {
-        commitStableSegment(binding, result, segmentEnd)
+        commitStableSegment(binding, result, segmentEnd, Number(binding.stableSegmentStartedAt))
         committed = true
       }
     }

@@ -2,6 +2,8 @@ package com.server.faceservice.config;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import java.util.Map;
+
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class AlertLog {
     private String id;
@@ -13,6 +15,7 @@ public class AlertLog {
     private String level;
     private String type;
     private String message;
+    private Map<String, Object> diagnostics;
 
     public AlertLog() {
     }
@@ -87,5 +90,13 @@ public class AlertLog {
 
     public void setMessage(String message) {
         this.message = message;
+    }
+
+    public Map<String, Object> getDiagnostics() {
+        return diagnostics;
+    }
+
+    public void setDiagnostics(Map<String, Object> diagnostics) {
+        this.diagnostics = diagnostics;
     }
 }

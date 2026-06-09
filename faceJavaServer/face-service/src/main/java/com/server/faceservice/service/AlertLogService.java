@@ -27,7 +27,12 @@ import java.util.UUID;
 public class AlertLogService {
     private static final Logger log = LoggerFactory.getLogger(AlertLogService.class);
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
-    private static final Set<String> ALLOWED_TYPES = Set.of("abnormal_start", "recovered", "eye_closed_danger");
+    private static final Set<String> ALLOWED_TYPES = Set.of(
+            "abnormal_start",
+            "recovered",
+            "eye_closed_danger",
+            "fatigue_diagnostic"
+    );
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Path logRoot;
