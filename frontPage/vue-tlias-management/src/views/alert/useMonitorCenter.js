@@ -2,6 +2,7 @@
 import { ElMessage, ElNotification } from 'element-plus'
 import { createEegMonitor } from './useAlertEeg'
 import { createFaceMonitor } from './useAlertFace'
+import { summarizeBehaviorSegment as summarizeBehaviorSamples } from './behaviorFusion'
 
 const PERSONNEL_STORAGE_KEY = 'alert-personnel-options'
 const DEVICE_STORAGE_KEY = 'alert-device-options'
@@ -800,73 +801,14 @@ function getSampleCounts(samples) {
   }, { eeg: 0, face: 0 })
 }
 
-function summarizeTimedStateSamples(samplesSource, segmentStart, segmentEnd, stateKey, maxGapMs = EYE_MAX_SAMPLE_GAP_MS) {
-  let previousSample = null
-  const recentSamples = []
-  ;[...samplesSource].sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0)).forEach((sample) => {
-    const ts = Number(sample.ts || 0)
-    if (!ts || ts >= segmentEnd) return
-    if (ts < segmentStart) previousSample = sample
-    else recentSamples.push(sample)
-  })
-  const samples = previousSample ? [{ ...previousSample, ts: segmentStart }, ...recentSamples] : recentSamples
-  return samples.reduce((duration, sample, index) => {
-    if (sample[stateKey] !== true) return duration
-    const ts = Number(sample.ts || 0)
-    const nextTs = index + 1 < samples.length ? Number(samples[index + 1].ts || segmentEnd) : segmentEnd
-    const start = Math.max(segmentStart, ts)
-    const end = Math.min(segmentEnd, nextTs, ts + maxGapMs)
-    return end > start ? duration + (end - start) : duration
-  }, 0)
-}
-
-function countContinuousStateRuns(samplesSource, segmentStart, segmentEnd, stateKey, minDurationMs, maxGapMs = EYE_MAX_SAMPLE_GAP_MS) {
-  let previousSample = null
-  const recentSamples = []
-  ;[...samplesSource].sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0)).forEach((sample) => {
-    const ts = Number(sample.ts || 0)
-    if (!ts || ts >= segmentEnd) return
-    if (ts < segmentStart) previousSample = sample
-    else recentSamples.push(sample)
-  })
-  const samples = previousSample ? [{ ...previousSample, ts: segmentStart }, ...recentSamples] : recentSamples
-  let count = 0
-  let runStart = null
-  let runEnd = null
-  let lastTrueTs = null
-  const closeRun = (observedEnd = false) => {
-    if (runStart != null && runEnd != null && lastTrueTs != null) {
-      const observedDuration = lastTrueTs - runStart
-      const inferredDuration = runEnd - runStart
-      if (observedDuration >= minDurationMs || (observedEnd && inferredDuration >= minDurationMs)) count += 1
-    }
-    runStart = null
-    runEnd = null
-    lastTrueTs = null
-  }
-  samples.forEach((sample, index) => {
-    const ts = Number(sample.ts || 0)
-    const nextTs = index + 1 < samples.length ? Number(samples[index + 1].ts || segmentEnd) : segmentEnd
-    const start = Math.max(segmentStart, ts)
-    const end = Math.min(segmentEnd, nextTs, ts + maxGapMs)
-    if (end <= start) return
-    if (sample[stateKey] === true) {
-      if (runStart != null && runEnd != null && start > runEnd) closeRun(false)
-      if (runStart == null) runStart = start
-      runEnd = end
-      lastTrueTs = Math.max(start, ts)
-      return
-    }
-    closeRun(runEnd != null && start <= runEnd)
-  })
-  closeRun(false)
-  return count
-}
-
 function summarizeBehaviorSegment(binding, segmentStart, segmentEnd) {
-  const closedMs = summarizeTimedStateSamples(binding.eyeSamples || [], segmentStart, segmentEnd, 'closed')
-  const yawnCount = countContinuousStateRuns(binding.mouthSamples || [], segmentStart, segmentEnd, 'open', YAWN_HOLD_MS)
-  return { closedMs, yawnCount }
+  return summarizeBehaviorSamples(
+    binding.eyeSamples || [],
+    binding.mouthSamples || [],
+    segmentStart,
+    segmentEnd,
+    { maxSampleGapMs: EYE_MAX_SAMPLE_GAP_MS, yawnHoldMs: YAWN_HOLD_MS }
+  )
 }
 
 function chooseStableSegmentEmotion(binding, samples, segmentStart = 0, segmentEnd = 0) {

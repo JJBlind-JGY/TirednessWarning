@@ -42,51 +42,11 @@ public class ModelMessageHandler {
             return;
         }
 
-        String status = valueOrDefault(json.getString("status"), "ok");
-        String emotion5 = json.getString("emotion5");
-        String emotionCat = json.getString("emotionCat");
-        String score = normalizeScore(json.get("score"));
-        String fatigueIndex = normalizeNumber(json.get("fatigueIndex"));
-        String fatigueRank = normalizeNumber(json.get("fatigueRank"));
-        Object faceBox = json.get("faceBox");
-        Object scores7 = json.get("scores7");
-        String eyeStatus = json.getString("eyeStatus");
-        Boolean eyeClosed = json.getBoolean("eyeClosed");
-        String eyeClosedScore = normalizeScore(json.get("eyeClosedScore"));
-        String eyeOpenScore = normalizeScore(json.get("eyeOpenScore"));
-        Object eyeBoxes = json.get("eyeBoxes");
-        Object eyeCheckedAt = json.get("eyeCheckedAt");
-        Boolean mouthOpen = json.getBoolean("mouthOpen");
-        String yawnScore = normalizeScore(json.get("yawnScore"));
-        Object mouthCheckedAt = json.get("mouthCheckedAt");
-        String image = json.getString("image");
-
-        WebMessage response = new WebMessage(
-                userId,
-                status,
-                emotion5,
-                emotionCat,
-                score,
-                fatigueIndex,
-                fatigueRank,
-                faceBox,
-                scores7,
-                eyeStatus,
-                eyeClosed,
-                eyeClosedScore,
-                eyeOpenScore,
-                eyeBoxes,
-                eyeCheckedAt,
-                mouthOpen,
-                yawnScore,
-                mouthCheckedAt,
-                System.currentTimeMillis(),
-                image
-        );
+        WebMessage response = toWebMessage(json, System.currentTimeMillis());
         abnormalSampleService.recordFacePrediction(json);
         messagingTemplate.convertAndSend(faceFatigueUrl + userId, response);
         logger.info("face model result pushed: userId={}, status={}, emotion5={}, emotionCat={}, score={}",
-                userId, status, emotion5, emotionCat, score);
+                userId, response.getStatus(), response.getEmotion5(), response.getEmotionCat(), response.getScore());
     }
 
     public void handleProcessedData(String fatigueRank, String userId, String fatigueIndex, String emotionCat, String score, String image) {
@@ -101,15 +61,40 @@ public class ModelMessageHandler {
         handleModelPayload(json);
     }
 
-    private String valueOrDefault(String value, String fallback) {
+    static WebMessage toWebMessage(JSONObject json, long timestamp) {
+        return new WebMessage(
+                json.getString("userId"),
+                valueOrDefault(json.getString("status"), "ok"),
+                json.getString("emotion5"),
+                json.getString("emotionCat"),
+                normalizeScore(json.get("score")),
+                normalizeNumber(json.get("fatigueIndex")),
+                normalizeNumber(json.get("fatigueRank")),
+                json.get("faceBox"),
+                json.get("scores7"),
+                json.getString("eyeStatus"),
+                json.getBoolean("eyeClosed"),
+                normalizeScore(json.get("eyeClosedScore")),
+                normalizeScore(json.get("eyeOpenScore")),
+                json.get("eyeBoxes"),
+                json.get("eyeCheckedAt"),
+                json.getBoolean("mouthOpen"),
+                normalizeScore(json.get("yawnScore")),
+                json.get("mouthCheckedAt"),
+                timestamp,
+                json.getString("image")
+        );
+    }
+
+    private static String valueOrDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
     }
 
-    private String normalizeNumber(Object value) {
+    private static String normalizeNumber(Object value) {
         return value == null ? "--" : String.valueOf(value);
     }
 
-    private String normalizeScore(Object value) {
+    private static String normalizeScore(Object value) {
         if (value == null) {
             return "--";
         }

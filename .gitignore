@@ -10,6 +10,10 @@ TirednessWarning-Release.archived-*/
 TirednessWarning-Release-Full/
 TirednessWarning-Release-Full.archived-*/
 TirednessWarning-Release-Full.rar
+TirednessWarning-Update-*/
+TirednessWarning-Update-*.zip
+TirednessWarning-Update-*.zip.archived-*
+TirednessWarning-Release-Full-*
 
 # ========================
 # Java

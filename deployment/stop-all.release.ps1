@@ -13,19 +13,20 @@ $PidDir = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "run"
 
 if (Test-Path -LiteralPath $PidDir) {
     Get-ChildItem -LiteralPath $PidDir -Filter "*.pid" -ErrorAction SilentlyContinue | ForEach-Object {
+        $pidFile = $_
         try {
-            $processId = [int](Get-Content -LiteralPath $_.FullName -Raw)
+            $processId = [int](Get-Content -LiteralPath $pidFile.FullName -Raw)
             if ($processId -ne $PID -and -not $targetMap.ContainsKey($processId)) {
                 $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
                 if ($process) {
                     $targetMap[$processId] = [pscustomobject]@{
                         ProcessId = $processId
-                        CommandLine = ("pid file {0}" -f $_.Name)
+                        CommandLine = ("pid file {0}" -f $pidFile.Name)
                     }
                 }
             }
         } catch {
-            Write-Host ("[WARN] Could not read pid file {0}: {1}" -f $_.FullName, $_.Exception.Message)
+            Write-Host ("[WARN] Could not read pid file {0}: {1}" -f $pidFile.FullName, $_.Exception.Message)
         }
     }
 }
@@ -57,6 +58,20 @@ function Is-ReleaseProcess {
         $cmd -like "*apps\eeg-python\eeg_0417.py*" -or
         $cmd -like "*apps\front\static-server\static-server.ps1*"
     )
+}
+
+function Clear-PidFiles {
+    if (-not (Test-Path -LiteralPath $PidDir)) {
+        return
+    }
+    Get-ChildItem -LiteralPath $PidDir -Filter "*.pid" -ErrorAction SilentlyContinue | ForEach-Object {
+        $pidFile = $_
+        try {
+            Set-Content -LiteralPath $pidFile.FullName -Value "" -Encoding ASCII
+        } catch {
+            Write-Host ("[WARN] Could not clear pid file {0}: {1}" -f $pidFile.FullName, $_.Exception.Message)
+        }
+    }
 }
 
 try {
@@ -113,6 +128,7 @@ try {
 $targets = @($targetMap.Values)
 if (-not $targets) {
     Write-Host "No matching release service processes were found."
+    Clear-PidFiles
     return
 }
 
@@ -135,12 +151,4 @@ foreach ($target in $targets) {
     }
 }
 
-if (Test-Path -LiteralPath $PidDir) {
-    Get-ChildItem -LiteralPath $PidDir -Filter "*.pid" -ErrorAction SilentlyContinue | ForEach-Object {
-        try {
-            Set-Content -LiteralPath $_.FullName -Value "" -Encoding ASCII
-        } catch {
-            Write-Host ("[WARN] Could not clear pid file {0}: {1}" -f $_.FullName, $_.Exception.Message)
-        }
-    }
-}
+Clear-PidFiles
