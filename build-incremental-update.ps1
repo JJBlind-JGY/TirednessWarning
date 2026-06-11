@@ -81,12 +81,15 @@ Ensure-Directory $UpdateDir
 Copy-UpdatePath "faceJavaServer\face-service\target\face-service-0.0.1-SNAPSHOT-exec.jar" "apps\face-service\face-service.jar"
 Copy-UpdatePath "facePythonServer\websocket_server.py" "apps\face-python\websocket_server.py"
 Copy-UpdatePath "facePythonServer\models\yawn_model_80_lite.onnx" "apps\face-python\models\yawn_model_80_lite.onnx"
+Copy-UpdatePath "frontPage\vue-tlias-management\src\py\EEG_0417.py" "apps\eeg-python\EEG_0417.py"
+Copy-UpdatePath "frontPage\vue-tlias-management\src\py\config\eeg-devices.json" "config\eeg-devices.json"
 Copy-UpdatePath "frontPage\vue-tlias-management\dist" "apps\front\dist"
 Copy-UpdatePath "deployment\check-env.release.ps1" "check-env.ps1"
 Copy-UpdatePath "deployment\stop-all.release.ps1" "stop-all.ps1"
 Copy-UpdatePath "deployment\update-incremental.release.ps1" "update.ps1"
 Copy-UpdatePath "deployment\merge-python-config.py" "tools\merge-python-config.py"
 Copy-UpdatePath "deployment\README-incremental-update.md" "README.md"
+Copy-UpdatePath "hardware\esp32-c3-eeg-wifi" "hardware\esp32-c3-eeg-wifi"
 
 $wheelDir = Join-Path $UpdateDir "wheels"
 Ensure-Directory $wheelDir

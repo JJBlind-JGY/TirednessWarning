@@ -42,7 +42,7 @@ const versionedFaceStreamUrl = computed(() => {
 function handlePersonChange() { if (binding.value) { updateBindingPerson(binding.value); persistBindings() } }
 function handleDeviceChange() { if (binding.value) updateBindingDevice(binding.value) }
 function handleFaceChannelChange() { if (binding.value) updateBindingCamera(binding.value) }
-function getPortText(workerId) { return DEVICE_OPTIONS.find((item) => item.value === workerId)?.port || '--' }
+function getPortText(workerId) { return DEVICE_OPTIONS.find((item) => item.value === workerId)?.baseUrl || '--' }
 function formatBand(value) { return `${Number(value || 0).toFixed(1)}%` }
 function formatFaceScore(value) { if (value == null || value === '--' || value === '') return '--'; const numeric = Number.parseFloat(String(value).replace('%', '')); return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : String(value) }
 function latestTime(bindingValue) { const value = bindingValue?.analysisTime || bindingValue?.lastValidFaceAt; return value ? formatShortTime(value) : '--:--:--' }
@@ -115,7 +115,7 @@ function closeEyePopup() {
       </div>
 
       <div class="quick-grid">
-        <div class="quick-card"><span>设备端口</span><strong>{{ getPortText(binding.workerId) }}</strong></div>
+        <div class="quick-card"><span>设备地址</span><strong>{{ getPortText(binding.workerId) }}</strong></div>
         <div class="quick-card"><span>接入状态</span><strong>{{ getAccessText(binding) }}</strong></div>
         <div class="quick-card"><span>综合状态</span><strong>{{ getDisplayEmotion(binding) }}</strong></div>
         <div class="quick-card"><span>最近时间</span><strong>{{ latestTime(binding) }}</strong></div>

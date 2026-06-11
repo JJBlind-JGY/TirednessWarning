@@ -14,6 +14,7 @@ TirednessWarning-Update-*/
 TirednessWarning-Update-*.zip
 TirednessWarning-Update-*.zip.archived-*
 TirednessWarning-Release-Full-*
+TirednessWarning-Release-*
 
 # ========================
 # Java
@@ -35,6 +36,9 @@ TirednessWarning-Release-Full-*
 **/.venv/
 **/venv/
 **/.env/
+hardware/esp32-c3-eeg-wifi/include/wifi_config.h
+hardware/esp32-c3-eeg-wifi/.pio/
+hardware/esp32-c3-eeg-wifi/.cache/
 
 # ========================
 # IDE / OS

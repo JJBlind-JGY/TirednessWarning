@@ -2,15 +2,8 @@
   {
     "workerId": 1,
     "value": 1,
-    "name": "EGG_1",
-    "port": "COM1",
-    "enabled": true
-  },
-  {
-    "workerId": 2,
-    "value": 2,
-    "name": "EGG_5",
-    "port": "COM5",
+    "name": "脑电设备 1",
+    "baseUrl": "http://10.137.178.196",
     "enabled": true
   }
 ]

@@ -1,0 +1,18 @@
+23:29:46.295 [main] INFO org.springframework.test.context.support.AnnotationConfigContextLoaderUtils -- Could not detect default configuration classes for test class [com.server.common.CommonApplicationTests]: CommonApplicationTests does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+23:29:46.413 [main] INFO org.springframework.boot.test.context.SpringBootTestContextBootstrapper -- Found @SpringBootConfiguration com.server.common.CommonApplication for test class com.server.common.CommonApplicationTests
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+ :: Spring Boot ::                (v3.2.4)
+
+2026-06-11T23:29:47.601+08:00  INFO 7784 --- [common] [           main] c.server.common.CommonApplicationTests   : No active profile set, falling back to 1 default profile: "default"
+2026-06-11T23:29:48.301+08:00  INFO 7784 --- [common] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T23:29:48.304+08:00  INFO 7784 --- [common] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2026-06-11T23:29:48.345+08:00  INFO 7784 --- [common] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 14 ms. Found 0 Redis repository interfaces.
+2026-06-11T23:29:48.658+08:00  INFO 7784 --- [common] [           main] o.s.cloud.context.scope.GenericScope     : BeanFactory id=133d2ee3-d59d-39c2-94cc-2d2fc7634a40
+2026-06-11T23:29:49.947+08:00  WARN 7784 --- [common] [           main] ion$DefaultTemplateResolverConfiguration : Cannot find template location: classpath:/templates/ (please add some templates, check your Thymeleaf configuration, or set spring.thymeleaf.check-template-location=false)
+2026-06-11T23:29:50.853+08:00  INFO 7784 --- [common] [           main] c.server.common.CommonApplicationTests   : Started CommonApplicationTests in 4.294 seconds (process running for 5.475)

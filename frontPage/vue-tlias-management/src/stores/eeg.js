@@ -229,12 +229,9 @@ export const useEegStore = defineStore('eeg', () => {
     accuracy.value = status.value === 'ok' ? 100 : 0
   }
 
-  function buildStreamUrl({ workerId, port } = {}) {
+  function buildStreamUrl({ workerId } = {}) {
     if (workerId != null && workerId !== '') {
       return `/eeg/stream?workerId=${encodeURIComponent(workerId)}`
-    }
-    if (port) {
-      return `/eeg/stream?port=${encodeURIComponent(port)}`
     }
     return '/eeg/stream'
   }

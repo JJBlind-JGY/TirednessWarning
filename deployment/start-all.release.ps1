@@ -60,10 +60,26 @@ function Start-ReleaseService {
         [string]$WorkDir,
         [string]$Command,
         [int]$Port,
-        [int]$StartupDelaySeconds = 2
+        [int]$StartupDelaySeconds = 2,
+        [string]$HealthUrl = "",
+        [string]$ExpectedService = "",
+        [string]$ExpectedTransport = ""
     )
 
     if ($Port -gt 0 -and (Test-Port $Port)) {
+        if ($HealthUrl -and $ExpectedService) {
+            try {
+                $health = Invoke-RestMethod -Uri $HealthUrl -TimeoutSec 2
+                if ($health.service -ne $ExpectedService) {
+                    throw "unexpected service '$($health.service)'"
+                }
+                if ($ExpectedTransport -and $health.transport -ne $ExpectedTransport) {
+                    throw "unexpected transport '$($health.transport)'"
+                }
+            } catch {
+                throw "$Name cannot start because port $Port is occupied by an incompatible or stale process. Stop that process and run start-all.ps1 again. Details: $($_.Exception.Message)"
+            }
+        }
         Write-Host "[SKIP] $Name port $Port is already listening."
         return
     }
@@ -155,7 +171,10 @@ Start-ReleaseService `
     -Name "eeg-python" `
     -WorkDir (Join-Root "apps\eeg-python") `
     -Command "set ""EEG_CONFIG_FILE=$Root\config\eeg-devices.json"" && ""$pythonExe"" .\EEG_0417.py" `
-    -Port 5000
+    -Port 5000 `
+    -HealthUrl "http://127.0.0.1:5000/" `
+    -ExpectedService "eeg-stream" `
+    -ExpectedTransport "wifi-http"
 
 Start-ReleaseService `
     -Name "front" `

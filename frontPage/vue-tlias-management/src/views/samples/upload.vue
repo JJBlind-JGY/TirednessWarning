@@ -418,7 +418,7 @@ function normalizeEmotion(value) {
 function getFaceStatusLabel() { return sample.value ? faceStatusText.value : '待加载' }
 function getEegStatusLabel() { return sample.value ? eegStatusText.value : '待加载' }
 function getAccessText() { return sample.value ? '已接入' : '自动接入中' }
-function getPortText() { return latestEeg.value.port || '--' }
+function getPortText() { return latestEeg.value.baseUrl || '--' }
 function getCameraLabel() { return manifest.value.cameraId || '未配置摄像头' }
 function formatBand(value) { return `${Number(value || 0).toFixed(1)}%` }
 function latestTime() { return sampleTime.value || '--:--:--' }
@@ -473,7 +473,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="quick-grid">
-        <div class="quick-card"><span>设备端口</span><strong>{{ getPortText() }}</strong></div>
+        <div class="quick-card"><span>设备地址</span><strong>{{ getPortText() }}</strong></div>
         <div class="quick-card"><span>接入状态</span><strong>{{ getAccessText() }}</strong></div>
         <div class="quick-card"><span>综合状态</span><strong>{{ emotionText }}</strong></div>
         <div class="quick-card"><span>最近时间</span><strong>{{ latestTime() }}</strong></div>

@@ -27,7 +27,7 @@ const {
 
 useMonitorCenterPage()
 function openDetail(bindingId) { router.push(`/alert/device/${bindingId}`) }
-function getDevicePort(workerId) { return DEVICE_OPTIONS.find((item) => item.value === workerId)?.port || '--' }
+function getDevicePort(workerId) { return DEVICE_OPTIONS.find((item) => item.value === workerId)?.baseUrl || '--' }
 function latestTime(binding) { const value = binding.analysisTime || binding.lastValidFaceAt; return value ? formatShortTime(value) : '--:--:--' }
 function adviceText(binding) { if (!binding.lastValidEegAt && !binding.lastValidFaceAt) return '等待有效数据'; return binding.emotion === 'normal' ? '继续监测' : '建议关注' }
 </script>
@@ -116,7 +116,7 @@ function adviceText(binding) { if (!binding.lastValidEegAt && !binding.lastValid
         </div>
 
         <div class="mini-footer">
-          <div class="mini-line"><span>设备端口</span><strong>{{ getDevicePort(binding.workerId) }}</strong></div>
+          <div class="mini-line"><span>设备地址</span><strong>{{ getDevicePort(binding.workerId) }}</strong></div>
           <div class="mini-line"><span>摄像头</span><strong>{{ getCameraLabel(binding.faceChannelId) }}</strong></div>
           <div class="mini-line"><span>脑电波形</span><strong>{{ binding.rawWaveBuffer.length ? '已接入' : getEegStatusLabel(binding) }}</strong></div>
           <div class="mini-line"><span>微表情</span><strong>{{ getFaceStatusLabel(binding) }}</strong></div>

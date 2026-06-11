@@ -173,6 +173,7 @@ Ensure-Directory (Join-Path $ReleaseDir "apps\front\dist")
 Ensure-Directory (Join-Path $ReleaseDir "apps\front\static-server")
 Ensure-Directory (Join-Path $ReleaseDir "config")
 Ensure-Directory (Join-Path $ReleaseDir "logs")
+Ensure-Directory (Join-Path $ReleaseDir "hardware")
 
 if (-not $SkipBuild) {
     Invoke-Step "Build Java service" {
@@ -214,6 +215,7 @@ Invoke-Step "Copy application files" {
     Copy-Path (Assert-Path "facePythonServer\certs") (Join-Path $ReleaseDir "apps\face-python\certs")
 
     Copy-Path (Assert-Path "frontPage\vue-tlias-management\src\py\EEG_0417.py") (Join-Path $ReleaseDir "apps\eeg-python\EEG_0417.py")
+    Copy-Path (Assert-Path "hardware\esp32-c3-eeg-wifi") (Join-Path $ReleaseDir "hardware\esp32-c3-eeg-wifi")
     if (Test-Path -LiteralPath (Join-Root "frontPage\vue-tlias-management\src\py\config")) {
         Copy-Path (Join-Root "frontPage\vue-tlias-management\src\py\config") (Join-Path $ReleaseDir "apps\eeg-python\config")
     }
@@ -292,10 +294,19 @@ if (-not $SkipRuntime) {
             $venvPython = Join-Path $venvPath "python.exe"
         }
 
-        if ((-not $SkipPythonInstall) -and (-not $PythonEnv)) {
-            & $venvPython -m pip install --upgrade pip
-            & $venvPython -m pip install -r (Join-Root "facePythonServer\requirements.txt")
-            & $venvPython -m pip install flask pyserial scipy
+        if (-not $SkipPythonInstall) {
+            & $venvPython -c "import flask, scipy, mediapipe, onnxruntime"
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Python runtime is missing required modules; installing project requirements."
+                if (-not $PythonEnv) {
+                    & $venvPython -m pip install --upgrade pip
+                }
+                & $venvPython -m pip install -r (Join-Root "facePythonServer\requirements.txt")
+                & $venvPython -m pip install flask scipy
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Failed to install required Python dependencies."
+                }
+            }
         }
     }
 }

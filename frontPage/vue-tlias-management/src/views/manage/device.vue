@@ -1,5 +1,5 @@
 <script setup>
-import { reactive } from 'vue'
+import { onBeforeUnmount, onMounted, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useMonitorCenter } from '@/views/alert/useMonitorCenter'
 
@@ -22,8 +22,10 @@ void initMonitorCenter()
 const eegForm = reactive({
   value: null,
   name: '',
-  port: ''
+  baseUrl: ''
 })
+const eegHealth = reactive({})
+let healthTimer = null
 
 const cameraForm = reactive({
   id: '',
@@ -36,7 +38,7 @@ const cameraForm = reactive({
 function resetEegForm() {
   eegForm.value = null
   eegForm.name = ''
-  eegForm.port = ''
+  eegForm.baseUrl = ''
 }
 
 function resetCameraForm() {
@@ -52,8 +54,9 @@ async function submitEegForm() {
     ElMessage.warning('请先填写脑电设备名称')
     return
   }
-  if (!eegForm.port) {
-    ElMessage.warning('请填写脑电串口')
+  eegForm.baseUrl = normalizeDeviceUrl(eegForm.baseUrl)
+  if (!isValidDeviceUrl(eegForm.baseUrl)) {
+    ElMessage.warning('请填写有效的 HTTP 设备地址，例如 http://192.168.1.50')
     return
   }
 
@@ -114,8 +117,77 @@ async function submitCameraForm() {
 function editEegRow(row) {
   eegForm.value = row.value
   eegForm.name = row.name
-  eegForm.port = row.port
+  eegForm.baseUrl = row.baseUrl
 }
+
+function isValidDeviceUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim())
+    return ['http:', 'https:'].includes(url.protocol) && Boolean(url.host)
+  } catch {
+    return false
+  }
+}
+
+function normalizeDeviceUrl(value) {
+  const input = String(value || '').trim().replace(/\/+$/, '')
+  return input && !input.includes('://') ? `http://${input}` : input
+}
+
+function formatLastSuccess(value) {
+  if (!value) return '--'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function deviceRuntime(row) {
+  return eegHealth[row.value] || {}
+}
+
+function deviceStatusMeta(row) {
+  const runtime = deviceRuntime(row)
+  const status = runtime.status || 'connecting'
+  if (status === 'online' && runtime.last_success_at) return { text: '采集中', type: 'success' }
+  if (status === 'connecting') return { text: '连接中', type: 'warning' }
+  if (status === 'offline') return { text: '设备离线', type: 'info' }
+  if (status === 'error') return { text: '协议错误', type: 'danger' }
+  return { text: '等待采集', type: 'info' }
+}
+
+async function refreshEegHealth() {
+  try {
+    const response = await fetch('/eeg/health', { cache: 'no-store' })
+    if (!response.ok) return
+    const payload = await response.json()
+    Object.keys(eegHealth).forEach((key) => delete eegHealth[key])
+    Object.entries(payload.workers || {}).forEach(([key, value]) => {
+      eegHealth[key] = value
+    })
+  } catch {
+    // Keep the last known device state while the EEG service restarts.
+  }
+}
+
+async function probeEegDevice(row) {
+  try {
+    const response = await fetch(`/eeg/devices/${encodeURIComponent(row.value)}/probe`, { cache: 'no-store' })
+    const payload = await response.json()
+    if (!response.ok) throw new Error(payload.message || '连接失败')
+    ElMessage.success(`设备连接正常：${payload.data?.deviceId || row.name}`)
+    await refreshEegHealth()
+  } catch (error) {
+    ElMessage.error(`设备连接失败：${error.message || '请检查地址和同一 WiFi'}`)
+  }
+}
+
+onMounted(() => {
+  void refreshEegHealth()
+  healthTimer = window.setInterval(refreshEegHealth, 5000)
+})
+
+onBeforeUnmount(() => {
+  if (healthTimer) window.clearInterval(healthTimer)
+})
 
 async function removeEegRow(row) {
   try {
@@ -168,8 +240,8 @@ async function removeCameraRow(row) {
           <el-form-item label="脑电设备名称">
             <el-input v-model="eegForm.name" placeholder="例如：脑电 1" />
           </el-form-item>
-          <el-form-item label="脑电串口">
-            <el-input v-model="eegForm.port" placeholder="例如：COM5" />
+          <el-form-item label="设备 IP / 地址">
+            <el-input v-model="eegForm.baseUrl" placeholder="例如：http://192.168.1.50" />
           </el-form-item>
         </div>
         <div class="form-actions">
@@ -207,13 +279,35 @@ async function removeCameraRow(row) {
           <h3>脑电设备列表</h3>
           <span class="count-chip">{{ DEVICE_OPTIONS.length }} 个</span>
         </div>
-        <el-table :data="DEVICE_OPTIONS" stripe empty-text="暂无脑电设备，请先新增脑电串口">
+        <el-table :data="DEVICE_OPTIONS" stripe empty-text="暂无脑电设备，请先新增 WiFi 脑电设备">
           <el-table-column prop="value" label="WorkerId" width="120" />
           <el-table-column prop="name" label="脑电设备名称" min-width="160" />
-          <el-table-column prop="port" label="串口" min-width="130" />
-          <el-table-column prop="label" label="展示名称" min-width="220" />
-          <el-table-column label="操作" width="180">
+          <el-table-column prop="baseUrl" label="设备地址" min-width="210" show-overflow-tooltip />
+          <el-table-column label="状态" min-width="150">
             <template #default="{ row }">
+              <el-tag :type="deviceStatusMeta(row).type">
+                {{ deviceStatusMeta(row).text }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="WiFi RSSI" width="110">
+            <template #default="{ row }">{{ deviceRuntime(row).device_rssi ?? '--' }}</template>
+          </el-table-column>
+          <el-table-column label="最近数据" width="120">
+            <template #default="{ row }">{{ formatLastSuccess(deviceRuntime(row).last_success_at) }}</template>
+          </el-table-column>
+          <el-table-column label="丢点" width="90">
+            <template #default="{ row }">{{ deviceRuntime(row).dropped_sample_count ?? 0 }}</template>
+          </el-table-column>
+          <el-table-column label="采样游标" width="120">
+            <template #default="{ row }">{{ deviceRuntime(row).sample_cursor ?? '--' }}</template>
+          </el-table-column>
+          <el-table-column label="延迟(ms)" width="100">
+            <template #default="{ row }">{{ deviceRuntime(row).sample_lag_ms ?? '--' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="240">
+            <template #default="{ row }">
+              <el-button link type="success" @click="probeEegDevice(row)">测试连接</el-button>
               <el-button link type="primary" @click="editEegRow(row)">编辑</el-button>
               <el-button link type="danger" @click="removeEegRow(row)">删除</el-button>
             </template>

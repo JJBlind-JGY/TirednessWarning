@@ -4,10 +4,11 @@
 
 1. 将 `TirednessWarning-Release` 整个目录复制到目标 Windows 电脑。
 2. 修改 `config/go2rtc.yaml` 中的 RTSP 摄像头地址。
-3. 如需修改脑电串口，编辑 `config/eeg-devices.json`。
-4. 右键运行 `check-env.ps1`，确认文件完整、端口未被占用。
-5. 右键运行 `start-all.ps1`。
-6. 打开 `http://127.0.0.1:5173/`。
+3. 将电脑和脑电设备连接到同一个 2.4GHz WiFi，并在路由器中为每台设备设置 DHCP 地址保留。
+4. 在 `config/eeg-devices.json` 中填写每台设备的 `baseUrl`，例如 `http://192.168.1.50`。
+5. 右键运行 `check-env.ps1`，确认文件完整、端口未被占用。
+6. 右键运行 `start-all.ps1`。
+7. 打开 `http://127.0.0.1:5173/`。
 
 ## 目标电脑不需要安装
 
@@ -32,7 +33,7 @@
 ## 目标电脑可能仍需要
 
 - 摄像头或采集卡驱动
-- 脑电设备串口驱动
+- 允许电脑访问脑电设备所在的局域网
 - Windows 防火墙放行本机端口
 - 允许 PowerShell 脚本运行
 
@@ -50,6 +51,29 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-all.ps1
 - Python 模型健康检查：`8766`
 - Java 服务：`8081`
 - EEG 服务：`5000`
+
+## 脑电 WiFi 设备
+
+固件工程位于 `hardware/esp32-c3-eeg-wifi`。使用 VS Code PlatformIO 打开该目录，
+复制 `include/wifi_config.example.h` 为 `include/wifi_config.h`，填写 2.4GHz WiFi
+名称、密码和唯一设备 ID 后编译烧录。
+
+设备配置示例：
+
+```json
+[
+  {
+    "workerId": 1,
+    "value": 1,
+    "name": "脑电设备 1",
+    "baseUrl": "http://192.168.1.50",
+    "enabled": true
+  }
+]
+```
+
+可先在浏览器访问 `http://设备IP/api/status` 验证固件在线，再在系统设备管理页
+点击“测试连接”。
 
 ## 日志
 

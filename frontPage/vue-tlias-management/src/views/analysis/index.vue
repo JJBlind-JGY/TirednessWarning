@@ -4,12 +4,11 @@ import { useRouter } from 'vue-router'
 import { useEegStore } from '@/stores/eeg'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
-import request from '@/utils/request'
 
 const router = useRouter()
 const store = useEegStore()
-const portList = ref([])
-const selectedPort = ref('')
+const deviceList = ref([])
+const selectedWorkerId = ref(null)
 const collecting = ref(false)
 const trendRef = ref(null)
 const barRef = ref(null)
@@ -43,13 +42,15 @@ const stats = computed(() => {
   ]
 })
 
-async function loadPorts() {
+async function loadDevices() {
   try {
-    const res = await request.get('/eeg/ports')
-    portList.value = Array.isArray(res?.data) ? res.data : []
-    selectedPort.value = portList.value[0] || ''
+    const response = await fetch('/eeg/devices', { cache: 'no-store' })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const res = await response.json()
+    deviceList.value = Array.isArray(res?.data) ? res.data : []
+    selectedWorkerId.value = deviceList.value[0]?.workerId ?? null
   } catch (error) {
-    console.warn('加载脑电端口失败', error)
+    console.warn('加载脑电设备失败', error)
   }
 }
 
@@ -106,11 +107,11 @@ function updateCharts() {
 }
 
 function startAnalysis() {
-  if (!selectedPort.value) return ElMessage.warning('请先选择脑电端口')
+  if (selectedWorkerId.value == null) return ElMessage.warning('请先选择脑电设备')
   if (collecting.value) return
-  store.startSse({ port: selectedPort.value })
+  store.startSse({ workerId: selectedWorkerId.value })
   collecting.value = true
-  ElMessage.success(`已接入 ${selectedPort.value}`)
+  ElMessage.success('已接入脑电设备')
 }
 
 function stopAnalysis() {
@@ -126,7 +127,7 @@ function resizeCharts() {
 }
 
 onMounted(async () => {
-  await loadPorts()
+  await loadDevices()
   initCharts()
   watch(() => store.analysisTime, pushHistory)
   window.addEventListener('resize', resizeCharts)
@@ -147,8 +148,8 @@ onBeforeUnmount(() => {
         <el-tag :type="statusType" size="small">{{ store.statusText }}</el-tag>
       </div>
       <div class="header-right">
-        <el-select v-model="selectedPort" placeholder="选择端口" size="small" class="port-select">
-          <el-option v-for="port in portList" :key="port" :label="port" :value="port" />
+        <el-select v-model="selectedWorkerId" placeholder="选择设备" size="small" class="port-select">
+          <el-option v-for="device in deviceList" :key="device.workerId" :label="`${device.name} / ${device.baseUrl}`" :value="device.workerId" />
         </el-select>
         <el-button type="primary" size="small" :disabled="collecting" @click="startAnalysis">开始分析</el-button>
         <el-button type="danger" size="small" :disabled="!collecting" @click="stopAnalysis">停止</el-button>

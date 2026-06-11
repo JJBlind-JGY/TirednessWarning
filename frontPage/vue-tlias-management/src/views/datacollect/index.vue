@@ -4,12 +4,11 @@ import { useRouter } from 'vue-router'
 import { useEegStore } from '@/stores/eeg'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
-import request from '@/utils/request'
 
 const router = useRouter()
 const store = useEegStore()
-const portList = ref([])
-const selectedPort = ref('')
+const deviceList = ref([])
+const selectedWorkerId = ref(null)
 const collecting = ref(false)
 const lineChartRef = ref(null)
 const rawWaveCache = ref([])
@@ -38,14 +37,16 @@ const indexData = computed(() => [
   { name: '虚弱', value: store.indices.weakness_idx }
 ])
 
-async function loadPorts() {
+async function loadDevices() {
   try {
-    const res = await request.get('/eeg/ports')
-    portList.value = Array.isArray(res?.data) ? res.data : []
-    selectedPort.value = portList.value[0] || ''
+    const response = await fetch('/eeg/devices', { cache: 'no-store' })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const res = await response.json()
+    deviceList.value = Array.isArray(res?.data) ? res.data : []
+    selectedWorkerId.value = deviceList.value[0]?.workerId ?? null
   } catch (error) {
-    console.warn('加载脑电端口失败', error)
-    portList.value = []
+    console.warn('加载脑电设备失败', error)
+    deviceList.value = []
   }
 }
 
@@ -83,14 +84,14 @@ function updateLineChart(newSamples) {
 }
 
 function startCollect() {
-  if (!selectedPort.value) {
-    ElMessage.warning('请先选择脑电端口')
+  if (selectedWorkerId.value == null) {
+    ElMessage.warning('请先选择脑电设备')
     return
   }
   if (collecting.value) return
-  store.startSse({ port: selectedPort.value })
+  store.startSse({ workerId: selectedWorkerId.value })
   collecting.value = true
-  ElMessage.success(`已接入 ${selectedPort.value}`)
+  ElMessage.success('已接入脑电设备')
 }
 
 function stopCollect() {
@@ -105,7 +106,7 @@ function handleResize() {
 }
 
 onMounted(async () => {
-  await loadPorts()
+  await loadDevices()
   initLineChart()
   watch(() => store.rawWave, updateLineChart)
   window.addEventListener('resize', handleResize)
@@ -125,8 +126,8 @@ onBeforeUnmount(() => {
         <el-tag :type="statusType" size="small">{{ store.statusText }}</el-tag>
       </div>
       <div class="header-right">
-        <el-select v-model="selectedPort" placeholder="选择端口" size="small" class="port-select">
-          <el-option v-for="port in portList" :key="port" :label="port" :value="port" />
+        <el-select v-model="selectedWorkerId" placeholder="选择设备" size="small" class="port-select">
+          <el-option v-for="device in deviceList" :key="device.workerId" :label="`${device.name} / ${device.baseUrl}`" :value="device.workerId" />
         </el-select>
         <el-button type="primary" size="small" :disabled="collecting" @click="startCollect">开始接入</el-button>
         <el-button type="danger" size="small" :disabled="!collecting" @click="stopCollect">停止</el-button>
