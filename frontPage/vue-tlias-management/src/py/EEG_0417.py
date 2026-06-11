@@ -909,7 +909,7 @@ class EEGWorker(threading.Thread):
         if samples:
             self.last_sample_at = datetime.utcnow().isoformat() + "Z"
         self.sample_lag_ms = max(0, int((device_next - returned_until) * 1000 / RAW_FS))
-        return returned_until < device_next
+        return returned_until < device_next, samples
 
     def _build_analysis_payload(self, payload):
         bands = payload.get("bands") or {}
@@ -937,12 +937,16 @@ class EEGWorker(threading.Thread):
             attention=self.last_attention,
             meditation=self.last_meditation,
         )
+        original_wave = [int(value) for value in self.raw_since_last[-RAW_FS:]]
         result.update({
             "workerId": self.worker_id,
             "baseUrl": self.base_url,
             "raw_powers": eeg_power,
             "raw_wave": self._get_raw_wave_chunk(),
             "wave_fs": TARGET_FS,
+            "raw_wave_original": original_wave,
+            "raw_wave_original_fs": RAW_FS,
+            "raw_wave_original_live_published": True,
             "analysis_time": datetime.utcnow().isoformat() + "Z",
             "analysis_ts": int(time.time() * 1000),
             "device_id": self.device_id,
@@ -971,7 +975,22 @@ class EEGWorker(threading.Thread):
                 self.device_boot_id = boot_id
                 self.device_id = str(payload.get("deviceId", ""))
                 self.device_rssi = payload.get("rssi")
-                has_backlog = self._consume_samples(payload, received_at_ms)
+                has_backlog, accepted_samples = self._consume_samples(payload, received_at_ms)
+                if accepted_samples:
+                    self._publish({
+                        "workerId": self.worker_id,
+                        "baseUrl": self.base_url,
+                        "status": "online",
+                        "payload_type": "raw_wave",
+                        "raw_wave_original": accepted_samples,
+                        "raw_wave_original_fs": RAW_FS,
+                        "sample_cursor": self.sample_cursor,
+                        "device_boot_id": self.device_boot_id,
+                        "device_id": self.device_id,
+                        "device_rssi": self.device_rssi,
+                        "dropped_sample_count": self.dropped_sample_count,
+                        "sample_lag_ms": self.sample_lag_ms,
+                    })
 
                 summary_index = int(payload.get("summaryIndex", 0))
                 if summary_index != self.last_summary_index:
@@ -1072,6 +1091,7 @@ class EEGWorker(threading.Thread):
             raw_wave.extend(item.get("raw_wave") or [])
             prediction = dict(item)
             prediction.pop("raw_wave", None)
+            prediction.pop("raw_wave_original", None)
             predictions.append(prediction)
         raw_tgam_values = [item["value"] for item in raw_tgam_samples]
         return {
@@ -1080,6 +1100,8 @@ class EEGWorker(threading.Thread):
             "windowEnd": before_ms,
             "waveFs": TARGET_FS,
             "rawWave": raw_wave,
+            "rawWaveOriginal": raw_tgam_values,
+            "rawWaveOriginalFs": RAW_FS,
             "rawTgamFs": RAW_FS,
             "rawTgamSamples": raw_tgam_values,
             "rawTgamCount": len(raw_tgam_values),

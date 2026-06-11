@@ -30,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -212,10 +213,14 @@ public class FaceDetectController {
     }
 
     @GetMapping("/demo-samples/{sampleId}/video")
-    public ResponseEntity<Resource> getDemoSampleVideo(@PathVariable String sampleId) {
+    public ResponseEntity<Resource> getDemoSampleVideo(@PathVariable String sampleId) throws IOException {
         Resource resource = demoSampleService.video(sampleId);
         return ResponseEntity.ok()
                 .contentType(MediaType.valueOf("video/mp4"))
+                .contentLength(resource.contentLength())
+                .header("Accept-Ranges", "bytes")
+                .header("Content-Disposition", "inline; filename=\"face.mp4\"")
+                .header("Cache-Control", "no-store")
                 .body(resource);
     }
 }

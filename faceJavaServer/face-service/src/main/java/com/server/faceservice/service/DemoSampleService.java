@@ -283,7 +283,13 @@ public class DemoSampleService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("workerId", rawTgam.path("workerId").asInt(0));
         result.put("rawTgamFs", rawTgam.path("rawTgamFs").asInt(0));
+        result.put("windowStart", rawTgam.path("windowStart").asLong(0));
+        result.put("windowEnd", rawTgam.path("windowEnd").asLong(0));
+        result.put("targetWindowStart", rawTgam.path("targetWindowStart").asLong(0));
+        result.put("targetWindowEnd", rawTgam.path("targetWindowEnd").asLong(0));
+        result.put("partial", rawTgam.path("partial").asBoolean(false));
         result.put("sampleCount", rawTgam.path("sampleCount").asInt(rawTgam.path("samples").size()));
+        result.put("samples", objectMapper.convertValue(rawTgam.path("samples"), List.class));
         return result;
     }
 

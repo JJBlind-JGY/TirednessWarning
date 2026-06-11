@@ -1,8 +1,7 @@
 ﻿import * as echarts from 'echarts'
 
-const RAW_WAVE_LIMIT = 512
-const WAVE_SMOOTH_WINDOW = 5
-const WAVE_DISPLAY_RANGE = 100
+const RAW_WAVE_FS = 512
+const RAW_WAVE_LIMIT = RAW_WAVE_FS * 4
 const EMOTION_TEXT = {
   normal: '正常',
   anxiety: '焦虑',
@@ -41,28 +40,9 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     }
   }
 
-  function smoothWaveSamples(samples) {
-    return samples.map((_, index) => {
-      const start = Math.max(0, index - WAVE_SMOOTH_WINDOW + 1)
-      const window = samples.slice(start, index + 1)
-      return window.reduce((sum, value) => sum + value, 0) / window.length
-    })
-  }
-
-  function normalizeWaveChunk(binding, rawWave = []) {
-    const numericSamples = rawWave.map(Number).filter(Number.isFinite)
-    if (!numericSamples.length) return []
-    const smoothed = smoothWaveSamples(numericSamples)
-    const mean = smoothed.reduce((sum, value) => sum + value, 0) / smoothed.length
-    const centered = smoothed.map((value) => value - mean)
-    const peak = centered.reduce((max, value) => Math.max(max, Math.abs(value)), 0)
-    if (!peak) return centered.map(() => 0)
-    binding.waveScale = binding.waveScale > 0 ? binding.waveScale * 0.82 + peak * 0.18 : peak
-    const scale = Math.max(binding.waveScale, 1)
-    return centered.map((value) => Number((Math.tanh((value / scale) * 1.6) * WAVE_DISPLAY_RANGE).toFixed(2)))
-  }
-
   function getWaveChartOption(binding) {
+    const amplitude = Number(binding.waveDisplayAmplitude || 100)
+    const pointCount = binding.rawWaveBuffer.length
     return {
       color: ['#0f766e'],
       tooltip: { trigger: 'axis' },
@@ -71,29 +51,23 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
         type: 'category',
         boundaryGap: false,
         axisLine: { lineStyle: { color: '#9db4c0' } },
-        data: binding.rawWaveBuffer.map((_, index) => index)
+        data: binding.rawWaveBuffer.map((_, index) => ((index - pointCount + 1) / RAW_WAVE_FS).toFixed(1))
       },
       yAxis: {
         type: 'value',
-        min: -WAVE_DISPLAY_RANGE,
-        max: WAVE_DISPLAY_RANGE,
+        min: -amplitude,
+        max: amplitude,
         axisLine: { show: false },
         splitLine: { lineStyle: { color: '#e6eef2' } }
       },
       series: [{
-        name: 'EEG raw wave',
+        name: 'EEG original wave (512Hz)',
         type: 'line',
         showSymbol: false,
-        smooth: true,
+        smooth: false,
         sampling: 'lttb',
         animation: false,
-        lineStyle: { width: 2 },
-        areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(15, 118, 110, 0.28)' },
-            { offset: 1, color: 'rgba(15, 118, 110, 0.02)' }
-          ])
-        },
+        lineStyle: { width: 1 },
         data: [...binding.rawWaveBuffer]
       }]
     }
@@ -160,9 +134,16 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   function refreshWaveChart(binding) {
     const instance = waveChartInstances.get(binding.id) || ensureWaveChart(binding)
     if (!instance) return
+    const peak = binding.rawWaveBuffer.reduce((max, value) => Math.max(max, Math.abs(value)), 0)
+    const targetAmplitude = Math.max(100, peak * 1.15)
+    const previousAmplitude = Number(binding.waveDisplayAmplitude || 100)
+    binding.waveDisplayAmplitude = targetAmplitude > previousAmplitude
+      ? targetAmplitude
+      : Math.max(targetAmplitude, previousAmplitude * 0.985)
+    const pointCount = binding.rawWaveBuffer.length
     instance.setOption({
-      xAxis: { data: binding.rawWaveBuffer.map((_, index) => index) },
-      yAxis: { min: -WAVE_DISPLAY_RANGE, max: WAVE_DISPLAY_RANGE },
+      xAxis: { data: binding.rawWaveBuffer.map((_, index) => ((index - pointCount + 1) / RAW_WAVE_FS).toFixed(1)) },
+      yAxis: { min: -binding.waveDisplayAmplitude, max: binding.waveDisplayAmplitude },
       series: [{ data: [...binding.rawWaveBuffer] }]
     })
     instance.resize()
@@ -216,7 +197,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
 
   function appendRawWave(binding, rawWave = []) {
     if (!Array.isArray(rawWave) || !rawWave.length) return
-    const samples = normalizeWaveChunk(binding, rawWave)
+    const samples = rawWave.map(Number).filter(Number.isFinite)
     if (!samples.length) return
     binding.rawWaveBuffer.push(...samples)
     if (binding.rawWaveBuffer.length > RAW_WAVE_LIMIT) {
@@ -251,6 +232,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
     binding.rawWaveBuffer = []
     binding.waveScale = 1
+    binding.waveDisplayAmplitude = 100
     clearCurrentEegPrediction(binding)
     refreshWaveChart(binding)
     refreshBandChart(binding)
@@ -272,7 +254,16 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
       return
     }
 
-    const hasRawWave = Array.isArray(payload.raw_wave) && payload.raw_wave.length > 0
+    const displayWave = Array.isArray(payload.raw_wave_original) ? payload.raw_wave_original : payload.raw_wave
+    if (payload.payload_type === 'raw_wave') {
+      binding.eegRunning = true
+      binding.eegStatus = 'online'
+      appendRawWave(binding, displayWave)
+      refreshWaveChart(binding)
+      return
+    }
+
+    const hasRawWave = Array.isArray(displayWave) && displayWave.length > 0
     const hasRawPowers = payload.raw_powers && Object.keys(payload.raw_powers).length > 0
     const isStatusOnlyPayload = ['connecting', 'online'].includes(status)
       && !payload.analysis_time
@@ -310,7 +301,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.baselineResetReason = payload.baseline_reset_reason || ''
     binding.baselineResetAt = payload.baseline_reset_at || ''
     binding.bandSnapshot = getBandSnapshot(payload.raw_powers)
-    appendRawWave(binding, payload.raw_wave)
+    if (!payload.raw_wave_original_live_published) appendRawWave(binding, displayWave)
 
     if (payload.status === 'ok' && payload.valid_current === true) {
       binding.lastValidEegEmotion = binding.eegEmotion
@@ -320,9 +311,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     }
 
     if (payload.status === 'no_contact' || payload.quality_level === 'no_contact') {
-      binding.rawWaveBuffer = []
       binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
-      binding.waveScale = 1
       binding.eegStatusText = '设备在线，等待佩戴'
     } else if (payload.status === 'calibrating') {
       binding.eegStatusText = `校准中 ${Math.round(binding.calibrationProgress * 100)}%`
@@ -341,6 +330,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   function resetWaveState(binding) {
     binding.rawWaveBuffer = []
     binding.waveScale = 1
+    binding.waveDisplayAmplitude = 100
     binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
     refreshWaveChart(binding)
     refreshBandChart(binding)

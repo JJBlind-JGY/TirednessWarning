@@ -143,6 +143,24 @@ class WifiEegWorkerTests(unittest.TestCase):
         result = worker.snapshot(seconds=1, before_ms=20_000)
         self.assertEqual(result["rawTgamSamples"], [3, 4, 5, 6])
         self.assertEqual(result["rawTgamCount"], 4)
+        self.assertEqual(result["rawWaveOriginal"], [3, 4, 5, 6])
+        self.assertEqual(result["rawWaveOriginalFs"], 512)
+
+    def test_analysis_payload_keeps_original_wave_for_display(self):
+        worker = self.make_worker()
+        worker._consume_samples(payload(0, [101, -202, 303]), 20_000)
+        result = worker._build_analysis_payload(payload(0, [], summary_index=2))
+        self.assertEqual(result["raw_wave_original"], [101, -202, 303])
+        self.assertEqual(result["raw_wave_original_fs"], 512)
+        self.assertTrue(result["raw_wave_original_live_published"])
+        self.assertIn("raw_wave", result)
+
+    def test_consume_samples_returns_only_new_original_values(self):
+        worker = self.make_worker()
+        _, first = worker._consume_samples(payload(0, [10, 11, 12]), 10_000)
+        _, second = worker._consume_samples(payload(1, [11, 12, 13]), 10_100)
+        self.assertEqual(first, [10, 11, 12])
+        self.assertEqual(second, [13])
 
     def test_synchronize_workers_starts_all_enabled_devices(self):
         devices = [

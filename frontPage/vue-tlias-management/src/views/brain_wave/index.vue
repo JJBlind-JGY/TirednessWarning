@@ -12,8 +12,12 @@ const selectedWorkerId = ref(null)
 const collecting = ref(false)
 const lineChartRef = ref(null)
 const rawWaveCache = ref([])
-const MAX_POINTS = 512
+const DISPLAY_SECONDS = 4
+const MAX_POINTS = 512 * DISPLAY_SECONDS
+const RENDER_INTERVAL_MS = 50
 let lineChartInstance = null
+let lastRenderAt = 0
+let displayAmplitude = 100
 
 const statusType = computed(() => {
   if (store.status === 'poor_signal') return 'warning'
@@ -56,10 +60,10 @@ function initLineChart() {
   lineChartInstance.setOption({
     tooltip: { trigger: 'axis' },
     grid: { left: 44, right: 18, top: 24, bottom: 34 },
-    xAxis: { type: 'category', boundaryGap: false, data: [] },
-    yAxis: { type: 'value', min: 'dataMin', max: 'dataMax' },
+    xAxis: { type: 'category', boundaryGap: false, name: '时间（秒）', data: [] },
+    yAxis: { type: 'value', min: -displayAmplitude, max: displayAmplitude, name: 'TGAM 原始值' },
     series: [{
-      name: '脑电波形',
+      name: '原始脑电波形（512Hz）',
       type: 'line',
       data: [],
       showSymbol: false,
@@ -77,8 +81,19 @@ function updateLineChart(newSamples) {
   if (rawWaveCache.value.length > MAX_POINTS) {
     rawWaveCache.value.splice(0, rawWaveCache.value.length - MAX_POINTS)
   }
+  const now = performance.now()
+  if (now - lastRenderAt < RENDER_INTERVAL_MS) return
+  lastRenderAt = now
+  const peak = rawWaveCache.value.reduce((max, value) => Math.max(max, Math.abs(value)), 0)
+  const targetAmplitude = Math.max(100, peak * 1.15)
+  displayAmplitude = targetAmplitude > displayAmplitude
+    ? targetAmplitude
+    : Math.max(targetAmplitude, displayAmplitude * 0.985)
+  const sampleRate = Number(store.rawWaveFs || 512)
+  const pointCount = rawWaveCache.value.length
   lineChartInstance.setOption({
-    xAxis: { data: rawWaveCache.value.map((_, index) => index) },
+    xAxis: { data: rawWaveCache.value.map((_, index) => ((index - pointCount + 1) / sampleRate).toFixed(1)) },
+    yAxis: { min: -displayAmplitude, max: displayAmplitude },
     series: [{ data: rawWaveCache.value }]
   })
 }
@@ -139,7 +154,7 @@ onBeforeUnmount(() => {
       <el-row :gutter="20">
         <el-col :span="16">
           <el-card shadow="hover" class="chart-card">
-            <div class="card-title">1-40Hz 滤波后实时波形</div>
+            <div class="card-title">设备原始脑电波形（512Hz，4秒示波器视图，数值未处理）</div>
             <div ref="lineChartRef" class="line-chart"></div>
           </el-card>
         </el-col>

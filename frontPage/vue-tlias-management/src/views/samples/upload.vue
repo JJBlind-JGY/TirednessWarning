@@ -13,9 +13,9 @@ const REQUIRED_FILES = [
   'eeg/predictions.jsonl',
   'face/predictions.jsonl'
 ]
-const RAW_WAVE_LIMIT = 512
-const WAVE_SMOOTH_WINDOW = 5
-const WAVE_DISPLAY_RANGE = 100
+const DISPLAY_SECONDS = 4
+const DEFAULT_RAW_FS = 512
+const RENDER_INTERVAL_MS = 50
 const BAND_NAMES = ['delta', 'theta', 'alpha', 'beta', 'gamma']
 const BAND_LABELS = { delta: 'Delta', theta: 'Theta', alpha: 'Alpha', beta: 'Beta', gamma: 'Gamma' }
 const BAND_COLORS = { delta: '#2563eb', theta: '#0891b2', alpha: '#0f766e', beta: '#ea580c', gamma: '#7c3aed' }
@@ -44,7 +44,8 @@ let chartInstance = null
 let bandChartInstance = null
 let playbackTimer = null
 let playbackStartedAt = 0
-let waveScale = 1
+let displayAmplitude = 100
+let lastWaveRenderAt = 0
 let playedSampleCount = 0
 let playedTimelineCount = 0
 
@@ -52,7 +53,17 @@ const manifest = computed(() => sample.value?.manifest || {})
 const latestEeg = computed(() => sample.value?.latestEeg || {})
 const latestFace = computed(() => sample.value?.latestFace || {})
 const rawWave = computed(() => sample.value?.rawWave || {})
-const rawSamples = computed(() => Array.isArray(rawWave.value.samples) ? rawWave.value.samples : [])
+const rawTgam = computed(() => sample.value?.rawTgam || {})
+const rawSamples = computed(() => {
+  const original = Array.isArray(rawTgam.value.samples) ? rawTgam.value.samples : []
+  return original.length ? original : (Array.isArray(rawWave.value.samples) ? rawWave.value.samples : [])
+})
+const rawSampleRate = computed(() => {
+  const originalFs = Number(rawTgam.value.rawTgamFs || 0)
+  return originalFs > 0 && Array.isArray(rawTgam.value.samples) && rawTgam.value.samples.length
+    ? originalFs
+    : Number(rawWave.value.waveFs || DEFAULT_RAW_FS)
+})
 const eegTimeline = computed(() => Array.isArray(sample.value?.eegTimeline) ? sample.value.eegTimeline : [])
 const currentBandSnapshot = computed(() => {
   const visible = getVisibleTimeline()
@@ -176,7 +187,8 @@ function resetPlaybackState() {
   stopPlayback()
   rawWaveBuffer.value = []
   visibleBands.value = [...BAND_NAMES]
-  waveScale = 1
+  displayAmplitude = 100
+  lastWaveRenderAt = 0
   playedSampleCount = 0
   playedTimelineCount = 0
   playbackState.value = sample.value ? 'loaded' : 'idle'
@@ -201,8 +213,12 @@ function startPlayback() {
     const playPromise = video.play()
     if (playPromise?.catch) playPromise.catch(() => {})
   }
-  playbackTimer = window.setInterval(tickPlayback, 80)
+  ensurePlaybackTimer()
   tickPlayback()
+}
+
+function ensurePlaybackTimer() {
+  if (!playbackTimer) playbackTimer = window.setInterval(tickPlayback, 80)
 }
 
 function stopPlayback() {
@@ -212,13 +228,55 @@ function stopPlayback() {
   }
 }
 
+function getPlaybackElapsedMs() {
+  const video = videoRef.value
+  if (video && video.readyState >= 1 && Number.isFinite(video.currentTime)) {
+    return Math.max(0, video.currentTime * 1000)
+  }
+  return Math.max(0, Date.now() - playbackStartedAt)
+}
+
+function handleVideoPlay() {
+  if (!sample.value) return
+  playbackState.value = 'playing'
+  playbackStartedAt = Date.now() - getPlaybackElapsedMs()
+  ensurePlaybackTimer()
+  tickPlayback()
+}
+
+function handleVideoPause() {
+  if (playbackState.value !== 'ended') playbackState.value = 'paused'
+  tickPlayback()
+}
+
+function syncPlaybackToVideo() {
+  const total = rawSamples.value.length
+  const timelineTotal = eegTimeline.value.length
+  const durationMs = getPlaybackDurationMs()
+  const elapsedMs = Math.min(getPlaybackElapsedMs(), durationMs)
+  const targetCount = getTargetRawSampleCount(elapsedMs, durationMs, total)
+  const waveLimit = Math.max(1, Math.round(rawSampleRate.value * DISPLAY_SECONDS))
+  rawWaveBuffer.value = rawSamples.value
+    .slice(Math.max(0, targetCount - waveLimit), targetCount)
+    .map(Number)
+    .filter(Number.isFinite)
+  playedSampleCount = targetCount
+  playedTimelineCount = Math.min(timelineTotal, Math.floor((elapsedMs / Math.max(durationMs, 1)) * timelineTotal))
+  lastWaveRenderAt = 0
+  refreshPlaybackCharts()
+}
+
 function tickPlayback() {
   const total = rawSamples.value.length
   const timelineTotal = eegTimeline.value.length
   if (!total && !timelineTotal) return
   const durationMs = getPlaybackDurationMs()
-  const elapsedMs = Math.min(Date.now() - playbackStartedAt, durationMs)
+  const elapsedMs = Math.min(getPlaybackElapsedMs(), durationMs)
   const targetCount = getTargetRawSampleCount(elapsedMs, durationMs, total)
+  if (targetCount < playedSampleCount) {
+    syncPlaybackToVideo()
+    return
+  }
   if (targetCount > playedSampleCount) {
     appendRawWave(rawSamples.value.slice(playedSampleCount, targetCount))
     playedSampleCount = targetCount
@@ -235,7 +293,11 @@ function tickPlayback() {
 
 function getTargetRawSampleCount(elapsedMs, durationMs, total) {
   if (!total) return 0
-  const waveFs = Number(rawWave.value.waveFs || 0)
+  const videoDuration = Number(videoRef.value?.duration || 0)
+  if (Number.isFinite(videoDuration) && videoDuration > 0) {
+    return Math.min(total, Math.floor((elapsedMs / Math.max(durationMs, 1)) * total))
+  }
+  const waveFs = rawSampleRate.value
   if (Number.isFinite(waveFs) && waveFs > 0) {
     return Math.min(total, Math.floor((elapsedMs / 1000) * waveFs))
   }
@@ -247,40 +309,31 @@ function getPlaybackDurationMs() {
   if (Number.isFinite(videoDuration) && videoDuration > 0) return videoDuration * 1000
   const windowMs = Number(manifest.value.windowMs || 0)
   if (windowMs > 0) return windowMs
-  const rawDuration = Number(rawWave.value.windowEnd || 0) - Number(rawWave.value.windowStart || 0)
+  const source = Array.isArray(rawTgam.value.samples) && rawTgam.value.samples.length ? rawTgam.value : rawWave.value
+  const rawDuration = Number(source.windowEnd || 0) - Number(source.windowStart || 0)
   return rawDuration > 0 ? rawDuration : 10000
 }
 
-function smoothWaveSamples(samples) {
-  return samples.map((_, index) => {
-    const start = Math.max(0, index - WAVE_SMOOTH_WINDOW + 1)
-    const window = samples.slice(start, index + 1)
-    return window.reduce((sum, value) => sum + value, 0) / window.length
-  })
-}
-
-function normalizeWaveChunk(rawWaveChunk = []) {
-  const numericSamples = rawWaveChunk.map(Number).filter(Number.isFinite)
-  if (!numericSamples.length) return []
-  const smoothed = smoothWaveSamples(numericSamples)
-  const mean = smoothed.reduce((sum, value) => sum + value, 0) / smoothed.length
-  const centered = smoothed.map((value) => value - mean)
-  const peak = centered.reduce((max, value) => Math.max(max, Math.abs(value)), 0)
-  if (!peak) return centered.map(() => 0)
-  waveScale = waveScale > 0 ? waveScale * 0.82 + peak * 0.18 : peak
-  const scale = Math.max(waveScale, 1)
-  return centered.map((value) => Number((Math.tanh((value / scale) * 1.6) * WAVE_DISPLAY_RANGE).toFixed(2)))
-}
-
 function appendRawWave(chunk = []) {
-  const samples = normalizeWaveChunk(chunk)
+  const samples = chunk.map(Number).filter(Number.isFinite)
   if (!samples.length) return
   rawWaveBuffer.value.push(...samples)
-  if (rawWaveBuffer.value.length > RAW_WAVE_LIMIT) rawWaveBuffer.value.splice(0, rawWaveBuffer.value.length - RAW_WAVE_LIMIT)
+  const limit = Math.max(1, Math.round(rawSampleRate.value * DISPLAY_SECONDS))
+  if (rawWaveBuffer.value.length > limit) rawWaveBuffer.value.splice(0, rawWaveBuffer.value.length - limit)
 }
 
 function getWaveXAxisData() {
-  return rawWaveBuffer.value.map((_, index) => index)
+  const fs = Math.max(1, rawSampleRate.value)
+  const count = rawWaveBuffer.value.length
+  return rawWaveBuffer.value.map((_, index) => ((index - count + 1) / fs).toFixed(1))
+}
+
+function updateDisplayAmplitude() {
+  const peak = rawWaveBuffer.value.reduce((max, value) => Math.max(max, Math.abs(value)), 0)
+  const targetAmplitude = Math.max(100, peak * 1.15)
+  displayAmplitude = targetAmplitude > displayAmplitude
+    ? targetAmplitude
+    : Math.max(targetAmplitude, displayAmplitude * 0.985)
 }
 
 function getWaveChartOption() {
@@ -288,17 +341,16 @@ function getWaveChartOption() {
     color: ['#0f766e'],
     tooltip: { trigger: 'axis' },
     grid: { left: 40, right: 20, top: 24, bottom: 28 },
-    xAxis: { type: 'category', boundaryGap: false, axisLine: { lineStyle: { color: '#9db4c0' } }, data: getWaveXAxisData() },
-    yAxis: { type: 'value', min: -WAVE_DISPLAY_RANGE, max: WAVE_DISPLAY_RANGE, axisLine: { show: false }, splitLine: { lineStyle: { color: '#e6eef2' } } },
+    xAxis: { type: 'category', boundaryGap: false, name: '时间（秒）', axisLine: { lineStyle: { color: '#9db4c0' } }, data: getWaveXAxisData() },
+    yAxis: { type: 'value', min: -displayAmplitude, max: displayAmplitude, name: 'TGAM 原始值', axisLine: { show: false }, splitLine: { lineStyle: { color: '#e6eef2' } } },
     series: [{
-      name: 'EEG raw wave',
+      name: `原始脑电波形（${rawSampleRate.value}Hz）`,
       type: 'line',
       showSymbol: false,
-      smooth: true,
+      smooth: false,
       sampling: 'lttb',
       animation: false,
-      lineStyle: { width: 2 },
-      areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(15, 118, 110, 0.28)' }, { offset: 1, color: 'rgba(15, 118, 110, 0.02)' }]) },
+      lineStyle: { width: 1 },
       data: [...rawWaveBuffer.value]
     }]
   }
@@ -350,6 +402,10 @@ function refreshPlaybackCharts() {
 }
 
 function refreshWaveChart() {
+  const now = performance.now()
+  if (now - lastWaveRenderAt < RENDER_INTERVAL_MS) return
+  lastWaveRenderAt = now
+  updateDisplayAmplitude()
   ensureWaveChart()
   if (!chartInstance) return
   chartInstance.setOption(getWaveChartOption(), true)
@@ -487,7 +543,20 @@ onBeforeUnmount(() => {
           <el-tag :type="sample ? 'success' : 'info'">{{ getFaceStatusLabel() }}</el-tag>
         </div>
         <div class="video-box">
-          <video ref="videoRef" class="result-video" :src="sample.videoUrl" autoplay muted playsinline controls preload="metadata" @loadedmetadata="startPlayback"></video>
+          <video
+            ref="videoRef"
+            class="result-video"
+            :src="sample.videoUrl"
+            autoplay
+            muted
+            playsinline
+            controls
+            preload="metadata"
+            @loadedmetadata="startPlayback"
+            @play="handleVideoPlay"
+            @pause="handleVideoPause"
+            @seeked="syncPlaybackToVideo"
+          ></video>
         </div>
         <div class="result-grid">
           <div class="metric-box"><span>面部接入状态</span><strong>{{ getFaceStatusLabel() }}</strong></div>
@@ -506,7 +575,7 @@ onBeforeUnmount(() => {
           <div class="signal-item"><span>脑电状态</span><strong>{{ getEegStatusLabel() }}</strong></div>
           <div class="signal-item"><span>波形更新状态</span><strong>{{ waveStatusText }}</strong></div>
         </div>
-        <div class="chart-title">原始脑电波形</div>
+        <div class="chart-title">原始脑电波形（{{ rawSampleRate }}Hz，4秒示波器视图，数值未处理）</div>
         <div class="chart-wrap wave-chart-wrap">
           <div ref="chartRef" class="eeg-chart"></div>
           <div v-if="!rawWaveBuffer.length" class="chart-empty">等待波形回放</div>

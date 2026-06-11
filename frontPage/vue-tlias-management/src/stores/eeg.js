@@ -137,6 +137,7 @@ function getBandSnapshot(rawPowers = {}) {
 
 export const useEegStore = defineStore('eeg', () => {
   const rawWave = ref([])
+  const rawWaveFs = ref(512)
   const indices = ref({
     anxiety_idx: 0,
     stress_idx: 0,
@@ -196,9 +197,18 @@ export const useEegStore = defineStore('eeg', () => {
   }
 
   function applyPayload(d) {
-    const bandSnapshot = getBandSnapshot(d.raw_powers)
+    const shouldApplyWave = d.payload_type === 'raw_wave' || !d.raw_wave_original_live_published
+    if (shouldApplyWave) {
+      rawWave.value = Array.isArray(d.raw_wave_original) ? d.raw_wave_original : (Array.isArray(d.raw_wave) ? d.raw_wave : [])
+      rawWaveFs.value = Number(d.raw_wave_original_fs || d.wave_fs || 512)
+    }
+    if (d.payload_type === 'raw_wave') {
+      status.value = d.status || 'online'
+      setStatusText(status.value, calibrationProgress.value)
+      return
+    }
 
-    rawWave.value = Array.isArray(d.raw_wave) ? d.raw_wave : []
+    const bandSnapshot = getBandSnapshot(d.raw_powers)
     rawPowers.value = d.raw_powers || {}
     indices.value = {
       anxiety_idx: Number(d.indices?.anxiety_idx || 0),
@@ -290,6 +300,7 @@ export const useEegStore = defineStore('eeg', () => {
 
   return {
     rawWave,
+    rawWaveFs,
     indices,
     rawPowers,
     features,
