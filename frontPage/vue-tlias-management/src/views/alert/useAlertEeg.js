@@ -2,8 +2,8 @@
 
 import { isInvalidEegContact } from './eegContact'
 
-const RAW_WAVE_FS = 512
-const RAW_WAVE_LIMIT = RAW_WAVE_FS * 4
+const DEFAULT_WAVE_FS = 128
+const WAVE_WINDOW_SECONDS = 6
 const EMOTION_TEXT = {
   normal: '正常',
   anxiety: '焦虑',
@@ -45,6 +45,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   function getWaveChartOption(binding) {
     const amplitude = Number(binding.waveDisplayAmplitude || 100)
     const pointCount = binding.rawWaveBuffer.length
+    const waveFs = Number(binding.waveDisplayFs || DEFAULT_WAVE_FS)
     return {
       color: ['#0f766e'],
       tooltip: { trigger: 'axis' },
@@ -53,7 +54,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
         type: 'category',
         boundaryGap: false,
         axisLine: { lineStyle: { color: '#9db4c0' } },
-        data: binding.rawWaveBuffer.map((_, index) => ((index - pointCount + 1) / RAW_WAVE_FS).toFixed(1))
+        data: binding.rawWaveBuffer.map((_, index) => ((index - pointCount + 1) / waveFs).toFixed(1))
       },
       yAxis: {
         type: 'value',
@@ -63,7 +64,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
         splitLine: { lineStyle: { color: '#e6eef2' } }
       },
       series: [{
-        name: 'EEG original wave (512Hz)',
+        name: 'EEG display wave',
         type: 'line',
         showSymbol: false,
         smooth: false,
@@ -136,15 +137,34 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   function refreshWaveChart(binding) {
     const instance = waveChartInstances.get(binding.id) || ensureWaveChart(binding)
     if (!instance) return
-    const peak = binding.rawWaveBuffer.reduce((max, value) => Math.max(max, Math.abs(value)), 0)
-    const targetAmplitude = Math.max(100, peak * 1.15)
+    const absoluteValues = binding.rawWaveBuffer
+      .map((value) => Math.abs(Number(value)))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b)
+    const percentileIndex = Math.max(0, Math.floor((absoluteValues.length - 1) * 0.95))
+    const robustPeak = absoluteValues[percentileIndex] || 0
+    const now = Date.now()
+    if (!binding.waveReferenceStartedAt) binding.waveReferenceStartedAt = now
+    if (now - binding.waveReferenceStartedAt <= 10000 && robustPeak > 0) {
+      binding.waveReferencePeaks.push(robustPeak)
+      if (binding.waveReferencePeaks.length > 120) binding.waveReferencePeaks.shift()
+    } else if (!binding.waveReferenceAmplitude && binding.waveReferencePeaks.length) {
+      const referencePeaks = [...binding.waveReferencePeaks].sort((a, b) => a - b)
+      binding.waveReferenceAmplitude = Math.max(
+        80,
+        referencePeaks[Math.floor((referencePeaks.length - 1) * 0.5)] * 1.35
+      )
+    }
+    const referenceAmplitude = Number(binding.waveReferenceAmplitude || 80)
+    const targetAmplitude = Math.max(referenceAmplitude, robustPeak * 1.35)
     const previousAmplitude = Number(binding.waveDisplayAmplitude || 100)
     binding.waveDisplayAmplitude = targetAmplitude > previousAmplitude
-      ? targetAmplitude
-      : Math.max(targetAmplitude, previousAmplitude * 0.985)
+      ? previousAmplitude * 0.35 + targetAmplitude * 0.65
+      : Math.max(targetAmplitude, previousAmplitude * 0.995)
     const pointCount = binding.rawWaveBuffer.length
+    const waveFs = Number(binding.waveDisplayFs || DEFAULT_WAVE_FS)
     instance.setOption({
-      xAxis: { data: binding.rawWaveBuffer.map((_, index) => ((index - pointCount + 1) / RAW_WAVE_FS).toFixed(1)) },
+      xAxis: { data: binding.rawWaveBuffer.map((_, index) => ((index - pointCount + 1) / waveFs).toFixed(1)) },
       yAxis: { min: -binding.waveDisplayAmplitude, max: binding.waveDisplayAmplitude },
       series: [{ data: [...binding.rawWaveBuffer] }]
     })
@@ -202,8 +222,9 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     const samples = rawWave.map(Number).filter(Number.isFinite)
     if (!samples.length) return
     binding.rawWaveBuffer.push(...samples)
-    if (binding.rawWaveBuffer.length > RAW_WAVE_LIMIT) {
-      binding.rawWaveBuffer.splice(0, binding.rawWaveBuffer.length - RAW_WAVE_LIMIT)
+    const waveLimit = Math.max(1, Number(binding.waveDisplayFs || DEFAULT_WAVE_FS)) * WAVE_WINDOW_SECONDS
+    if (binding.rawWaveBuffer.length > waveLimit) {
+      binding.rawWaveBuffer.splice(0, binding.rawWaveBuffer.length - waveLimit)
     }
   }
 
@@ -235,6 +256,10 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.rawWaveBuffer = []
     binding.waveScale = 1
     binding.waveDisplayAmplitude = 100
+    binding.waveDisplayFs = DEFAULT_WAVE_FS
+    binding.waveReferenceStartedAt = 0
+    binding.waveReferencePeaks = []
+    binding.waveReferenceAmplitude = 0
     clearCurrentEegPrediction(binding)
     refreshWaveChart(binding)
     refreshBandChart(binding)
@@ -278,10 +303,13 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
       return
     }
 
-    const displayWave = Array.isArray(payload.raw_wave_original) ? payload.raw_wave_original : payload.raw_wave
+    const displayWave = Array.isArray(payload.raw_wave_display)
+      ? payload.raw_wave_display
+      : (Array.isArray(payload.raw_wave_original) ? payload.raw_wave_original : payload.raw_wave)
     if (payload.payload_type === 'raw_wave') {
       binding.eegRunning = true
       binding.eegStatus = 'online'
+      binding.waveDisplayFs = Number(payload.display_wave_fs || payload.raw_wave_original_fs || payload.wave_fs || DEFAULT_WAVE_FS)
       appendRawWave(binding, displayWave)
       refreshWaveChart(binding)
       return
@@ -325,6 +353,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.baselineResetReason = payload.baseline_reset_reason || ''
     binding.baselineResetAt = payload.baseline_reset_at || ''
     binding.bandSnapshot = getBandSnapshot(payload.raw_powers)
+    binding.waveDisplayFs = Number(payload.display_wave_fs || payload.raw_wave_original_fs || payload.wave_fs || binding.waveDisplayFs || DEFAULT_WAVE_FS)
     if (!payload.raw_wave_original_live_published) appendRawWave(binding, displayWave)
 
     if (payload.status === 'ok' && payload.valid_current === true) {
@@ -355,6 +384,10 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.rawWaveBuffer = []
     binding.waveScale = 1
     binding.waveDisplayAmplitude = 100
+    binding.waveDisplayFs = DEFAULT_WAVE_FS
+    binding.waveReferenceStartedAt = 0
+    binding.waveReferencePeaks = []
+    binding.waveReferenceAmplitude = 0
     binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
     refreshWaveChart(binding)
     refreshBandChart(binding)
