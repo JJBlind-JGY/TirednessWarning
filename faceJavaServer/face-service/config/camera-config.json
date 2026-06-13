@@ -1,6 +1,15 @@
 [ {
-  "id" : "camera_01",
-  "name" : "camera_01",
-  "rtspUrl" : "rtsp://192.168.1.8:554/type=0&id=3",
-  "streamName" : "camera_01"
+  "id" : "local_camera_0",
+  "name" : "本机摄像头",
+  "sourceType" : "local",
+  "deviceIndex" : 0,
+  "rtspUrl" : "",
+  "streamName" : "local_camera_0"
+}, {
+  "id" : "camera_02",
+  "name" : "local_camera",
+  "sourceType" : "local",
+  "deviceIndex" : 0,
+  "rtspUrl" : "",
+  "streamName" : "camera_02"
 } ]

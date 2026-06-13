@@ -31,6 +31,8 @@ const cameraForm = reactive({
   id: '',
   originalId: '',
   name: '',
+  sourceType: 'local',
+  deviceIndex: 0,
   rtspUrl: '',
   streamName: ''
 })
@@ -45,6 +47,8 @@ function resetCameraForm() {
   cameraForm.id = ''
   cameraForm.originalId = ''
   cameraForm.name = ''
+  cameraForm.sourceType = 'local'
+  cameraForm.deviceIndex = 0
   cameraForm.rtspUrl = ''
   cameraForm.streamName = ''
 }
@@ -83,7 +87,7 @@ async function submitCameraForm() {
     ElMessage.warning('请填写摄像头名称')
     return
   }
-  if (!cameraForm.rtspUrl) {
+  if (cameraForm.sourceType === 'rtsp' && !cameraForm.rtspUrl) {
     ElMessage.warning('请填写 RTSP 地址')
     return
   }
@@ -91,7 +95,9 @@ async function submitCameraForm() {
   const payload = {
     id: cameraForm.id,
     name: cameraForm.name,
-    rtspUrl: cameraForm.rtspUrl,
+    sourceType: cameraForm.sourceType,
+    deviceIndex: cameraForm.deviceIndex,
+    rtspUrl: cameraForm.sourceType === 'rtsp' ? cameraForm.rtspUrl : '',
     streamName: cameraForm.streamName || cameraForm.id
   }
 
@@ -205,6 +211,8 @@ function editCameraRow(row) {
   cameraForm.id = row.id
   cameraForm.originalId = row.id
   cameraForm.name = row.name
+  cameraForm.sourceType = row.sourceType || 'rtsp'
+  cameraForm.deviceIndex = row.deviceIndex ?? 0
   cameraForm.rtspUrl = row.rtspUrl
   cameraForm.streamName = row.streamName || row.id
 }
@@ -261,10 +269,19 @@ async function removeCameraRow(row) {
           <el-form-item label="摄像头名称">
             <el-input v-model="cameraForm.name" placeholder="例如：入口摄像头" />
           </el-form-item>
-          <el-form-item label="RTSP 地址">
+          <el-form-item label="摄像头来源">
+            <el-select v-model="cameraForm.sourceType">
+              <el-option label="本机摄像头" value="local" />
+              <el-option label="RTSP 摄像头" value="rtsp" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="cameraForm.sourceType === 'local'" label="设备索引">
+            <el-input-number v-model="cameraForm.deviceIndex" :min="0" :step="1" />
+          </el-form-item>
+          <el-form-item v-else label="RTSP 地址">
             <el-input v-model="cameraForm.rtspUrl" placeholder="rtsp://192.168.1.8:554/type=0&id=3" />
           </el-form-item>
-          <el-form-item label="go2rtc stream">
+          <el-form-item v-if="cameraForm.sourceType === 'rtsp'" label="go2rtc stream">
             <el-input v-model="cameraForm.streamName" placeholder="optional, default camera id" />
           </el-form-item>
         </div>
@@ -323,7 +340,12 @@ async function removeCameraRow(row) {
         <el-table :data="CAMERA_OPTIONS" stripe empty-text="暂无摄像头设备，请先新增 RTSP 地址">
           <el-table-column prop="id" label="通道" min-width="150" />
           <el-table-column prop="name" label="摄像头名称" min-width="160" />
-          <el-table-column prop="rtspUrl" label="RTSP 地址" min-width="280" show-overflow-tooltip />
+          <el-table-column label="来源" width="110">
+            <template #default="{ row }">{{ row.sourceType === 'local' ? '本机' : 'RTSP' }}</template>
+          </el-table-column>
+          <el-table-column label="设备地址" min-width="280" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.sourceType === 'local' ? `设备索引 ${row.deviceIndex}` : row.rtspUrl }}</template>
+          </el-table-column>
           <el-table-column label="操作" width="180">
             <template #default="{ row }">
               <el-button link type="primary" @click="editCameraRow(row)">编辑</el-button>

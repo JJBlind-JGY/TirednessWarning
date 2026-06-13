@@ -54,11 +54,10 @@ public class VideoStreamAutoRunner {
     public synchronized void reloadStreams() {
         Set<String> activeIds = new HashSet<>();
         cameraConfigService.list().stream()
-                .filter(camera -> camera.getRtspUrl() != null && !camera.getRtspUrl().isBlank())
                 .forEach(camera -> {
                     activeIds.add(camera.getId());
                     CameraWorker existing = workers.get(camera.getId());
-                    if (existing != null && !camera.getRtspUrl().equals(existing.rtspUrl)) {
+                    if (existing != null && !cameraSourceKey(camera).equals(existing.sourceKey)) {
                         stopCamera(camera.getId());
                     }
                     startCamera(camera);
@@ -156,10 +155,17 @@ public class VideoStreamAutoRunner {
         }
     }
 
+    static String cameraSourceKey(CameraConfig camera) {
+        return camera.isLocal()
+                ? "local:" + (camera.getDeviceIndex() == null ? 0 : camera.getDeviceIndex())
+                : "rtsp:" + camera.getRtspUrl();
+    }
+
     private class CameraWorker implements Runnable {
         private final CameraConfig camera;
         private final String cameraId;
         private final String rtspUrl;
+        private final String sourceKey;
         private final AtomicBoolean running = new AtomicBoolean(true);
         private final Thread thread;
         private boolean wasRtspReachable = false;
@@ -168,6 +174,7 @@ public class VideoStreamAutoRunner {
             this.camera = camera;
             this.cameraId = camera.getId();
             this.rtspUrl = camera.getRtspUrl();
+            this.sourceKey = cameraSourceKey(camera);
             this.thread = new Thread(this, "RTSP-Stream-" + cameraId);
             this.thread.setDaemon(true);
         }
@@ -198,7 +205,7 @@ public class VideoStreamAutoRunner {
                         continue;
                     }
 
-                    if (!isRtspReachable(rtspUrl)) {
+                    if (!camera.isLocal() && !isRtspReachable(rtspUrl)) {
                         wasRtspReachable = false;
                         publishCameraStatus(cameraId, "camera_unreachable", "RTSP port is not reachable yet.");
                         if (!sleepBeforeRetry(this)) {
@@ -207,7 +214,7 @@ public class VideoStreamAutoRunner {
                         continue;
                     }
 
-                    if (!wasRtspReachable) {
+                    if (!camera.isLocal() && !wasRtspReachable) {
                         wasRtspReachable = true;
                         boolean refreshed = cameraConfigService.refreshRuntime(camera);
                         publishCameraStatus(
@@ -218,8 +225,18 @@ public class VideoStreamAutoRunner {
                     }
 
                     publishCameraStatus(cameraId, "reconnecting", "Connecting camera stream.");
-                    log.info("Connecting camera stream | id={} url={}", cameraId, rtspUrl);
-                    faceDetectService.processVideo(rtspUrl, cameraId);
+                    if (camera.isLocal()) {
+                        boolean refreshed = cameraConfigService.refreshRuntime(camera);
+                        if (!refreshed) {
+                            log.debug("go2rtc local camera refresh did not return success | id={}", cameraId);
+                        }
+                        String modelInputUrl = cameraConfigService.modelInputUrl(camera);
+                        log.info("Connecting local camera through go2rtc | id={} url={}", cameraId, modelInputUrl);
+                        faceDetectService.processVideo(modelInputUrl, cameraId);
+                    } else {
+                        log.info("Connecting camera stream | id={} url={}", cameraId, rtspUrl);
+                        faceDetectService.processVideo(rtspUrl, cameraId);
+                    }
                     if (running.get()) {
                         publishCameraStatus(cameraId, "offline", "Camera stream disconnected.");
                     }

@@ -59,7 +59,9 @@ public class CameraConfigService {
                     new TypeReference<List<CameraConfig>>() {
                     }
             );
-            List<CameraConfig> normalized = cameras == null ? new ArrayList<>() : cameras;
+            List<CameraConfig> normalized = cameras == null
+                    ? new ArrayList<>()
+                    : new ArrayList<>(cameras.stream().map(this::normalize).toList());
             if (normalized.isEmpty()) {
                 List<CameraConfig> imported = loadGo2RtcStreams();
                 if (!imported.isEmpty()) {
@@ -104,7 +106,7 @@ public class CameraConfigService {
     }
 
     public synchronized boolean refreshRuntime(CameraConfig camera) {
-        if (camera == null || !StringUtils.hasText(camera.getRtspUrl())) {
+        if (camera == null) {
             return false;
         }
         boolean streamUpdated = syncStreamsViaApi(List.of(camera));
@@ -119,15 +121,23 @@ public class CameraConfigService {
         return refreshed;
     }
 
-    private CameraConfig normalize(CameraConfig camera) {
+    CameraConfig normalize(CameraConfig camera) {
         String id = StringUtils.hasText(camera.getId()) ? camera.getId().trim() : "camera_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         String name = StringUtils.hasText(camera.getName()) ? camera.getName().trim() : id;
+        String sourceType = StringUtils.hasText(camera.getSourceType()) ? camera.getSourceType().trim().toLowerCase() : "rtsp";
+        if (!"rtsp".equals(sourceType) && !"local".equals(sourceType)) {
+            throw new IllegalArgumentException("Camera sourceType must be rtsp or local");
+        }
+        int deviceIndex = camera.getDeviceIndex() == null ? 0 : camera.getDeviceIndex();
+        if (deviceIndex < 0) {
+            throw new IllegalArgumentException("Local camera deviceIndex must be zero or greater");
+        }
         String rtspUrl = StringUtils.hasText(camera.getRtspUrl()) ? camera.getRtspUrl().trim() : "";
         String streamName = StringUtils.hasText(camera.getStreamName()) ? camera.getStreamName().trim() : id;
-        if (!StringUtils.hasText(rtspUrl)) {
+        if ("rtsp".equals(sourceType) && !StringUtils.hasText(rtspUrl)) {
             throw new IllegalArgumentException("RTSP url is required");
         }
-        return new CameraConfig(id, name, rtspUrl, streamName);
+        return new CameraConfig(id, name, sourceType, deviceIndex, rtspUrl, streamName);
     }
 
     private void save(List<CameraConfig> cameras) {
@@ -158,15 +168,18 @@ public class CameraConfigService {
         StringBuilder yaml = new StringBuilder();
         yaml.append("streams:\n");
         for (CameraConfig camera : cameras) {
-            if (!StringUtils.hasText(camera.getRtspUrl())) {
+            String source = streamSource(camera);
+            if (!StringUtils.hasText(source)) {
                 continue;
             }
             String streamName = StringUtils.hasText(camera.getStreamName()) ? camera.getStreamName() : camera.getId();
             yaml.append("  ").append(streamName).append(":\n");
-            yaml.append("    - ").append(camera.getRtspUrl()).append("\n");
+            yaml.append("    - ").append(source).append("\n");
         }
         yaml.append("\nwebrtc:\n");
         yaml.append("  listen: :1984\n\n");
+        yaml.append("rtsp:\n");
+        yaml.append("  listen: :8554\n\n");
         yaml.append("api:\n");
         yaml.append("  listen: :1984\n");
         Files.writeString(go2rtcConfigPath, yaml.toString());
@@ -233,14 +246,35 @@ public class CameraConfigService {
     private boolean syncStreamsViaApi(List<CameraConfig> cameras) {
         boolean changed = false;
         for (CameraConfig camera : cameras) {
-            if (!StringUtils.hasText(camera.getRtspUrl())) {
+            String source = streamSource(camera);
+            if (!StringUtils.hasText(source)) {
                 continue;
             }
             String streamName = StringUtils.hasText(camera.getStreamName()) ? camera.getStreamName() : camera.getId();
-            String query = "?dst=" + urlEncode(streamName) + "&src=" + urlEncode(camera.getRtspUrl());
+            String query = "?dst=" + urlEncode(streamName) + "&src=" + urlEncode(source);
             changed = tryGo2RtcRequest("POST", "/api/streams" + query) || changed;
         }
         return changed;
+    }
+
+    static String streamSource(CameraConfig camera) {
+        if (camera == null) {
+            return "";
+        }
+        if (camera.isLocal()) {
+            int deviceIndex = camera.getDeviceIndex() == null ? 0 : camera.getDeviceIndex();
+            return "ffmpeg:device?video=" + deviceIndex
+                    + "&video_size=1280x720&framerate=30#video=h264";
+        }
+        return StringUtils.hasText(camera.getRtspUrl()) ? camera.getRtspUrl().trim() : "";
+    }
+
+    public String modelInputUrl(CameraConfig camera) {
+        if (camera == null || !camera.isLocal()) {
+            return camera == null ? "" : camera.getRtspUrl();
+        }
+        String streamName = StringUtils.hasText(camera.getStreamName()) ? camera.getStreamName() : camera.getId();
+        return "rtsp://127.0.0.1:8554/" + streamName + "?video=h264";
     }
 
     private boolean tryGo2RtcRequest(String method, String pathAndQuery) {

@@ -1,9 +1,12 @@
 streams:
-  camera_01:
-    - rtsp://192.168.1.8:554/type=0&id=3
+  local_camera_0:
+    - ffmpeg:device?video=0&video_size=1280x720&framerate=30#video=h264
 
 webrtc:
   listen: :1984
+
+rtsp:
+  listen: :8554
 
 api:
   listen: :1984
