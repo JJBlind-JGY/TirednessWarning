@@ -199,8 +199,10 @@ export const useEegStore = defineStore('eeg', () => {
   function applyPayload(d) {
     const shouldApplyWave = d.payload_type === 'raw_wave' || !d.raw_wave_original_live_published
     if (shouldApplyWave) {
-      rawWave.value = Array.isArray(d.raw_wave_original) ? d.raw_wave_original : (Array.isArray(d.raw_wave) ? d.raw_wave : [])
-      rawWaveFs.value = Number(d.raw_wave_original_fs || d.wave_fs || 512)
+      rawWave.value = Array.isArray(d.raw_wave_display)
+        ? d.raw_wave_display
+        : (Array.isArray(d.raw_wave_original) ? d.raw_wave_original : (Array.isArray(d.raw_wave) ? d.raw_wave : []))
+      rawWaveFs.value = Number(d.display_wave_fs || d.raw_wave_original_fs || d.wave_fs || 512)
     }
     if (d.payload_type === 'raw_wave') {
       status.value = d.status || 'online'

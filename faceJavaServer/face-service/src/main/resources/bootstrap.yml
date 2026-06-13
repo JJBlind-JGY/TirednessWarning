@@ -3,7 +3,7 @@ spring:
     name: faceservice
 app:
   camera:
-    config-file: config/camera-config.json
+    config-file: face-service/config/camera-config.json
   personnel:
     config-file: config/personnel-config.json
   rtsp:

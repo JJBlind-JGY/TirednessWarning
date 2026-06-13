@@ -9,6 +9,7 @@ import jakarta.annotation.PreDestroy;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
+import org.bytedeco.javacv.FrameGrabber;
 import org.bytedeco.javacv.Java2DFrameConverter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -149,19 +150,23 @@ public class FaceDetectService {
     }
 
     public void processVideo(String rtspUrl, String userId) throws Exception {
-        long generation = nextGeneration(userId);
-        try (FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(rtspUrl)) {
-            configureGrabber(grabber);
+        FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(rtspUrl);
+        configureGrabber(grabber);
+        processGrabber(grabber, userId, "Camera stream connected.");
+    }
 
+    private void processGrabber(FrameGrabber grabber, String userId, String connectedMessage) throws Exception {
+        long generation = nextGeneration(userId);
+        try (grabber) {
             grabber.start();
-            if (grabber.grabImage() == null) {
+            if (grabImage(grabber) == null) {
                 publishCameraStatus(userId, "no_frame", "No frame received from camera.");
                 throw new Exception("Failed to grab the first frame from the video stream.");
             }
-            publishCameraStatus(userId, "online", "Camera stream connected.");
+            publishCameraStatus(userId, "online", connectedMessage);
 
             Frame frame;
-            while (!Thread.currentThread().isInterrupted() && (frame = grabber.grabImage()) != null) {
+            while (!Thread.currentThread().isInterrupted() && (frame = grabImage(grabber)) != null) {
                 if (frame.image == null) {
                     continue;
                 }
@@ -219,11 +224,18 @@ public class FaceDetectService {
                 });
             }
             publishCameraStatus(userId, "offline", "Camera stream ended.");
-        } catch (FFmpegFrameGrabber.Exception e) {
+        } catch (FrameGrabber.Exception e) {
             publishCameraStatus(userId, "offline", e.getMessage());
-            System.err.println("RTSP Stream Error: " + e.getMessage());
+            System.err.println("Camera stream error: " + e.getMessage());
             throw e;
         }
+    }
+
+    private Frame grabImage(FrameGrabber grabber) throws FrameGrabber.Exception {
+        if (grabber instanceof FFmpegFrameGrabber ffmpegGrabber) {
+            return ffmpegGrabber.grabImage();
+        }
+        return grabber.grab();
     }
 
     private void configureGrabber(FFmpegFrameGrabber grabber) {

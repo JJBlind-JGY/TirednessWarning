@@ -8,6 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "EEG_0417.py"
 SPEC = importlib.util.spec_from_file_location("eeg_wifi_service", MODULE_PATH)
@@ -154,6 +156,35 @@ class WifiEegWorkerTests(unittest.TestCase):
         self.assertEqual(result["raw_wave_original_fs"], 512)
         self.assertTrue(result["raw_wave_original_live_published"])
         self.assertIn("raw_wave", result)
+        self.assertIn("raw_wave_display", result)
+        self.assertEqual(result["display_wave_fs"], 128)
+
+    def test_display_filter_removes_constant_offset(self):
+        worker = self.make_worker()
+        samples = [1200] * (EEG.RAW_FS * 2)
+        filtered = np.asarray(worker._filter_display_samples(samples, update_state=False))
+        self.assertLess(np.mean(np.abs(filtered[-EEG.RAW_FS:])), 1.0)
+
+    def test_display_filter_suppresses_fifty_hz_noise(self):
+        worker = self.make_worker()
+        timeline = np.arange(EEG.RAW_FS * 4) / EEG.RAW_FS
+        samples = 300 * np.sin(2 * np.pi * 10 * timeline) + 300 * np.sin(2 * np.pi * 50 * timeline)
+        filtered = np.asarray(worker._filter_display_samples(samples, update_state=False))
+        frequencies = np.fft.rfftfreq(filtered.size, 1 / EEG.RAW_FS)
+        spectrum = np.abs(np.fft.rfft(filtered))
+        power_10 = spectrum[np.argmin(np.abs(frequencies - 10))]
+        power_50 = spectrum[np.argmin(np.abs(frequencies - 50))]
+        self.assertGreater(power_10, power_50 * 8)
+
+    def test_display_filter_preserves_action_amplitude_change(self):
+        worker = self.make_worker()
+        timeline = np.arange(EEG.RAW_FS * 4) / EEG.RAW_FS
+        samples = 40 * np.sin(2 * np.pi * 10 * timeline)
+        samples[EEG.RAW_FS * 2:] *= 5
+        filtered = np.asarray(worker._filter_display_samples(samples, update_state=False))
+        quiet_rms = np.sqrt(np.mean(filtered[EEG.RAW_FS:EEG.RAW_FS * 2] ** 2))
+        action_rms = np.sqrt(np.mean(filtered[EEG.RAW_FS * 3:] ** 2))
+        self.assertGreater(action_rms, quiet_rms * 3)
 
     def test_consume_samples_returns_only_new_original_values(self):
         worker = self.make_worker()
@@ -179,6 +210,7 @@ class WifiEegWorkerTests(unittest.TestCase):
     def test_poor_signal_clears_existing_wave(self):
         worker = self.make_worker()
         worker._consume_samples(payload(0, [1, 2, 3]), 10_000)
+        worker._filter_display_samples([1] * 64)
         changed, blocked, status, quality = worker._update_contact_state(107)
         self.assertTrue(changed)
         self.assertTrue(blocked)
@@ -186,6 +218,7 @@ class WifiEegWorkerTests(unittest.TestCase):
         self.assertEqual(quality, "bad_contact")
         self.assertEqual(list(worker.raw_buffer), [])
         self.assertEqual(worker.raw_since_last, [])
+        self.assertIsNone(worker.display_filter_zi)
 
     def test_contact_recovery_only_accepts_new_samples(self):
         worker = self.make_worker()

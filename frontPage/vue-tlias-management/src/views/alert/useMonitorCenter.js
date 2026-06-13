@@ -2,6 +2,7 @@
 import { ElMessage, ElNotification } from 'element-plus'
 import { createEegMonitor } from './useAlertEeg'
 import { createFaceMonitor } from './useAlertFace'
+import { normalizeCameraRecord } from './monitorDeviceConfig'
 import {
   selectStateWindowSamples,
   summarizeBehaviorSegment as summarizeBehaviorSamples
@@ -134,11 +135,7 @@ function normalizeDevice(item, index = 0) {
 }
 
 function normalizeCamera(item, index = 0) {
-  const id = String(item.id || item.faceChannelId || item.cameraId || `camera_${String(index + 1).padStart(3, '0')}`)
-  const name = String(item.name || `摄像头${index + 1}`)
-  const rtspUrl = String(item.rtspUrl || '')
-  const streamName = String(item.streamName || item.go2rtcStream || id)
-  return { id, name, rtspUrl, streamName, streamUrl: `${GO2RTC_BASE_URL}/stream.html?src=${encodeURIComponent(streamName)}&mode=webrtc`, label: `${name} / ${id}` }
+  return normalizeCameraRecord(item, index, GO2RTC_BASE_URL)
 }
 
 async function loadPersonnel() {
@@ -179,7 +176,7 @@ async function loadCameras() {
 
 function persistPersonnel() { writeLocalList(PERSONNEL_STORAGE_KEY, state.personnelOptions.map(({ id, uid, name, type }) => ({ id, uid, name, type }))) }
 function persistDevices() { writeLocalList(DEVICE_STORAGE_KEY, DEVICE_OPTIONS.map(({ value, name, baseUrl }) => ({ value, name, baseUrl }))) }
-function persistCameras() { writeLocalList(CAMERA_STORAGE_KEY, CAMERA_OPTIONS.map(({ id, name, rtspUrl, streamName }) => ({ id, name, rtspUrl, streamName }))) }
+function persistCameras() { writeLocalList(CAMERA_STORAGE_KEY, CAMERA_OPTIONS.map(({ id, name, sourceType, deviceIndex, rtspUrl, streamName }) => ({ id, name, sourceType, deviceIndex, rtspUrl, streamName }))) }
 function loadBindings() { state.bindings = readLocalList(BINDINGS_STORAGE_KEY, []).map(normalizeBinding) }
 function persistBindings() { writeLocalList(BINDINGS_STORAGE_KEY, state.bindings.map(({ id, personId, personName, personType, workerId, faceChannelId }) => ({ id, personId, personName, personType, workerId, faceChannelId }))) }
 function getDefaultCameraId() { return CAMERA_OPTIONS[0]?.id || '' }
@@ -198,7 +195,8 @@ function createBinding(seed = 1) {
     lastFatigueDiagnosticAt: 0,
     analysisTime: '', calibrationProgress: 0, baselineResetReason: '', baselineResetAt: '',
     indices: { anxiety_idx: 0, stress_idx: 0, fatigue_idx: 0, weakness_idx: 0 }, probs: {},
-    bandSnapshot: { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }, rawWaveBuffer: [], waveScale: 1,
+    bandSnapshot: { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }, rawWaveBuffer: [], waveScale: 1, waveDisplayFs: 128, waveDisplayAmplitude: 100,
+    waveReferenceStartedAt: 0, waveReferencePeaks: [], waveReferenceAmplitude: 0,
     faceConnected: false, faceImageUrl: '', faceStatusText: '待接入', faceStatus: 'idle', faceEmotion: '未识别', faceEmotionKey: '', faceScore: '--', faceRate: '--', faceRank: null, faceBox: null,
     lastValidFaceEmotion: '', lastValidFaceEmotionZh: '', lastValidFaceAt: 0, lastValidFaceScore: 0, lastRecordedFaceSampleAt: 0, faceAssistStreak: 0, faceStopRequired: false,
     eyeStatus: 'waiting', eyeStatusText: EYE_TEXT.waiting, eyeClosed: null, eyeClosedScore: 0, eyeOpenScore: 0, eyeBoxes: [], eyeLastValidAt: 0,
@@ -1115,9 +1113,9 @@ async function addDevice(record) { const normalized = normalizeDevice({ value: g
 async function updateDevice(record) { const index = DEVICE_OPTIONS.findIndex((item) => item.value === Number(record.value)); if (index === -1) return; const normalized = normalizeDevice(record, index); await syncRemoteDevice(normalized); DEVICE_OPTIONS[index] = normalized; persistDevices(); state.bindings.forEach((binding) => { if (binding.workerId === normalized.value) { eegMonitor.stopEeg(binding.id, 'restart'); eegMonitor.ensureAutoEeg(binding) } }); persistBindings() }
 async function removeDevice(deviceValue) { const index = DEVICE_OPTIONS.findIndex((item) => item.value === Number(deviceValue)); if (index === -1) return; await removeRemoteDevice(deviceValue); DEVICE_OPTIONS.splice(index, 1); persistDevices(); syncBindingsWithDevices() }
 
-async function syncRemoteCamera(camera) { if (!camera.rtspUrl) return; const response = await fetch(`${FACE_SERVICE_BASE}/cameras`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: camera.id, name: camera.name, rtspUrl: camera.rtspUrl, streamName: camera.streamName }) }); if (!response.ok) throw new Error(`camera save failed: ${response.status}`) }
+async function syncRemoteCamera(camera) { const response = await fetch(`${FACE_SERVICE_BASE}/cameras`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: camera.id, name: camera.name, sourceType: camera.sourceType, deviceIndex: camera.deviceIndex, rtspUrl: camera.rtspUrl, streamName: camera.streamName }) }); if (!response.ok) throw new Error(`camera save failed: ${response.status}`) }
 async function removeRemoteCamera(cameraId) { const response = await fetch(`${FACE_SERVICE_BASE}/cameras/${encodeURIComponent(cameraId)}`, { method: 'DELETE' }); if (!response.ok && response.status !== 404) throw new Error(`camera delete failed: ${response.status}`) }
-async function addCamera(record) { const normalized = normalizeCamera({ id: record.id || `camera_${Date.now()}`, name: record.name, rtspUrl: record.rtspUrl, streamName: record.streamName }, CAMERA_OPTIONS.length); await syncRemoteCamera(normalized); CAMERA_OPTIONS.push(normalized); persistCameras(); state.bindings.forEach((binding) => { if (!binding.faceChannelId) { binding.faceChannelId = normalized.id; faceMonitor.subscribeFace(binding) } }) }
+async function addCamera(record) { const normalized = normalizeCamera({ id: record.id || `camera_${Date.now()}`, name: record.name, sourceType: record.sourceType, deviceIndex: record.deviceIndex, rtspUrl: record.rtspUrl, streamName: record.streamName }, CAMERA_OPTIONS.length); await syncRemoteCamera(normalized); CAMERA_OPTIONS.push(normalized); persistCameras(); state.bindings.forEach((binding) => { if (!binding.faceChannelId) { binding.faceChannelId = normalized.id; faceMonitor.subscribeFace(binding) } }) }
 async function updateCamera(record) { const index = CAMERA_OPTIONS.findIndex((item) => item.id === record.id); if (index === -1) return; const normalized = normalizeCamera(record, index); await syncRemoteCamera(normalized); CAMERA_OPTIONS[index] = normalized; persistCameras(); state.bindings.forEach((binding) => { if (binding.faceChannelId === record.id) faceMonitor.refreshFaceSubscription(binding.id) }); persistBindings() }
 async function removeCamera(cameraId) { const index = CAMERA_OPTIONS.findIndex((item) => item.id === cameraId); if (index === -1) return; await removeRemoteCamera(cameraId); CAMERA_OPTIONS.splice(index, 1); persistCameras(); syncBindingsWithCameras() }
 

@@ -1,11 +1,14 @@
 package com.server.faceservice.config;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class CameraConfig {
     private String id;
     private String name;
+    private String sourceType;
+    private Integer deviceIndex;
     private String rtspUrl;
     private String streamName;
 
@@ -17,8 +20,14 @@ public class CameraConfig {
     }
 
     public CameraConfig(String id, String name, String rtspUrl, String streamName) {
+        this(id, name, "rtsp", 0, rtspUrl, streamName);
+    }
+
+    public CameraConfig(String id, String name, String sourceType, Integer deviceIndex, String rtspUrl, String streamName) {
         this.id = id;
         this.name = name;
+        this.sourceType = sourceType;
+        this.deviceIndex = deviceIndex;
         this.rtspUrl = rtspUrl;
         this.streamName = streamName;
     }
@@ -39,6 +48,22 @@ public class CameraConfig {
         this.name = name;
     }
 
+    public String getSourceType() {
+        return sourceType;
+    }
+
+    public void setSourceType(String sourceType) {
+        this.sourceType = sourceType;
+    }
+
+    public Integer getDeviceIndex() {
+        return deviceIndex;
+    }
+
+    public void setDeviceIndex(Integer deviceIndex) {
+        this.deviceIndex = deviceIndex;
+    }
+
     public String getRtspUrl() {
         return rtspUrl;
     }
@@ -53,5 +78,10 @@ public class CameraConfig {
 
     public void setStreamName(String streamName) {
         this.streamName = streamName;
+    }
+
+    @JsonIgnore
+    public boolean isLocal() {
+        return "local".equalsIgnoreCase(sourceType);
     }
 }

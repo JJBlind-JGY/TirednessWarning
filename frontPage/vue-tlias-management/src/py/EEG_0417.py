@@ -27,7 +27,7 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 from flask import Flask, Response, request
-from scipy.signal import butter, lfilter, lfilter_zi
+from scipy.signal import butter, iirnotch, lfilter, lfilter_zi, sosfilt, sosfilt_zi, tf2sos
 from scipy.special import softmax
 
 
@@ -60,6 +60,11 @@ SAMPLE_SEC = 4
 WINDOW_SIZE = RAW_FS * SAMPLE_SEC
 DOWNSAMPLE_FACTOR = RAW_FS // TARGET_FS
 BP_B, BP_A = butter(4, [1 / (RAW_FS / 2), 40 / (RAW_FS / 2)], btype="band")
+DISPLAY_NOTCH_B, DISPLAY_NOTCH_A = iirnotch(50, 30, fs=RAW_FS)
+DISPLAY_SOS = np.vstack((
+    tf2sos(DISPLAY_NOTCH_B, DISPLAY_NOTCH_A),
+    butter(4, [0.5, 35], btype="bandpass", fs=RAW_FS, output="sos"),
+))
 BASELINE_SEC = 30
 MIN_BASELINE_SAMPLES = 10
 NO_CONTACT_BASELINE_RESET_SEC = 30.0
@@ -783,6 +788,7 @@ class EEGWorker(threading.Thread):
         self.last_attention = None
         self.last_meditation = None
         self.raw_filter_zi = None
+        self.display_filter_zi = None
         self.last_debug_log_time = 0.0
         self.total_raw_count = 0
         self.total_eeg_power_count = 0
@@ -869,6 +875,7 @@ class EEGWorker(threading.Thread):
         self.raw_buffer.clear()
         self.raw_since_last.clear()
         self.raw_filter_zi = None
+        self.display_filter_zi = None
         self.last_summary_index = None
         self.analyzer.reset_baseline(reason)
 
@@ -929,6 +936,7 @@ class EEGWorker(threading.Thread):
             self.raw_buffer.clear()
             self.raw_since_last.clear()
             self.raw_filter_zi = None
+            self.display_filter_zi = None
         return changed, blocked, status, quality_level
 
     def _build_analysis_payload(self, payload):
@@ -958,6 +966,7 @@ class EEGWorker(threading.Thread):
             meditation=self.last_meditation,
         )
         original_wave = [int(value) for value in self.raw_since_last[-RAW_FS:]]
+        display_wave = self._filter_display_samples(original_wave, update_state=False)[::DOWNSAMPLE_FACTOR]
         result.update({
             "workerId": self.worker_id,
             "baseUrl": self.base_url,
@@ -967,6 +976,8 @@ class EEGWorker(threading.Thread):
             "raw_wave_original": original_wave,
             "raw_wave_original_fs": RAW_FS,
             "raw_wave_original_live_published": True,
+            "raw_wave_display": [float(round(value, 3)) for value in display_wave],
+            "display_wave_fs": TARGET_FS,
             "analysis_time": datetime.utcnow().isoformat() + "Z",
             "analysis_ts": int(time.time() * 1000),
             "device_id": self.device_id,
@@ -1011,6 +1022,7 @@ class EEGWorker(threading.Thread):
                         "quality_level": quality_level,
                     })
                 if accepted_samples:
+                    display_samples = self._filter_display_samples(accepted_samples)[::DOWNSAMPLE_FACTOR]
                     self._publish({
                         "workerId": self.worker_id,
                         "baseUrl": self.base_url,
@@ -1020,6 +1032,8 @@ class EEGWorker(threading.Thread):
                         "quality_level": quality_level,
                         "raw_wave_original": accepted_samples,
                         "raw_wave_original_fs": RAW_FS,
+                        "raw_wave_display": [float(round(value, 3)) for value in display_samples],
+                        "display_wave_fs": TARGET_FS,
                         "sample_cursor": self.sample_cursor,
                         "device_boot_id": self.device_boot_id,
                         "device_id": self.device_id,
@@ -1174,6 +1188,31 @@ class EEGWorker(threading.Thread):
         else:
             zi = lfilter_zi(BP_B, BP_A) * arr[0]
             filtered, _ = lfilter(BP_B, BP_A, arr, zi=zi)
+        return filtered.tolist()
+
+    def _filter_display_samples(self, samples, update_state=True):
+        if samples is None or len(samples) == 0:
+            return []
+        arr = np.asarray(samples, dtype=np.float64)
+        reference = np.asarray(self.raw_buffer, dtype=np.float64)
+        if reference.size < 32:
+            reference = arr
+        center = float(np.median(reference))
+        mad = float(np.median(np.abs(reference - center)))
+        soft_limit = min(600.0, max(128.0, 6.0 * 1.4826 * mad))
+        softened = center + soft_limit * np.tanh((arr - center) / soft_limit)
+
+        if update_state:
+            if self.display_filter_zi is None:
+                self.display_filter_zi = sosfilt_zi(DISPLAY_SOS) * softened[0]
+            filtered, self.display_filter_zi = sosfilt(
+                DISPLAY_SOS,
+                softened,
+                zi=self.display_filter_zi,
+            )
+        else:
+            zi = sosfilt_zi(DISPLAY_SOS) * softened[0]
+            filtered, _ = sosfilt(DISPLAY_SOS, softened, zi=zi)
         return filtered.tolist()
 
     def _should_log_debug(self):
