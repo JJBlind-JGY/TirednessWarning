@@ -779,6 +779,7 @@ class EEGWorker(threading.Thread):
         self.snapshot_history = deque(maxlen=SNAPSHOT_CACHE_SEC * 2)
         self.snapshot_lock = threading.Lock()
         self.last_signal_quality = 0
+        self.contact_blocked = False
         self.last_attention = None
         self.last_meditation = None
         self.raw_filter_zi = None
@@ -880,7 +881,7 @@ class EEGWorker(threading.Thread):
         if not isinstance(payload.get("samples"), list):
             raise ValueError("device samples must be an array")
 
-    def _consume_samples(self, payload, received_at_ms):
+    def _consume_samples(self, payload, received_at_ms, accept_samples=True):
         start_index = int(payload.get("startIndex", 0))
         returned_until = int(payload.get("returnedUntilIndex", start_index))
         samples = [int(value) for value in payload.get("samples", [])]
@@ -900,16 +901,35 @@ class EEGWorker(threading.Thread):
             sample_index = start_index + offset
             samples_behind = max(0, device_next - 1 - sample_index)
             sample_ts = received_at_ms - int(samples_behind * 1000 / RAW_FS)
+            self.total_raw_count += 1
+            if not accept_samples:
+                continue
             self.raw_buffer.append(raw_value)
             self.raw_since_last.append(raw_value)
             self._remember_raw_tgam(raw_value, sample_ts)
-            self.total_raw_count += 1
 
         self.sample_cursor = returned_until
-        if samples:
+        if samples and accept_samples:
             self.last_sample_at = datetime.utcnow().isoformat() + "Z"
         self.sample_lag_ms = max(0, int((device_next - returned_until) * 1000 / RAW_FS))
-        return returned_until < device_next, samples
+        return returned_until < device_next, samples if accept_samples else []
+
+    def _contact_state(self, signal_quality):
+        quality_level = self.analyzer._quality_level(signal_quality)
+        blocked = quality_level in {"no_contact", "bad_contact", "poor", "unknown"}
+        status = "no_contact" if quality_level == "no_contact" else "poor_signal"
+        return blocked, status, quality_level
+
+    def _update_contact_state(self, signal_quality):
+        blocked, status, quality_level = self._contact_state(signal_quality)
+        changed = blocked != self.contact_blocked
+        self.contact_blocked = blocked
+        self.last_signal_quality = signal_quality
+        if blocked:
+            self.raw_buffer.clear()
+            self.raw_since_last.clear()
+            self.raw_filter_zi = None
+        return changed, blocked, status, quality_level
 
     def _build_analysis_payload(self, payload):
         bands = payload.get("bands") or {}
@@ -975,13 +995,29 @@ class EEGWorker(threading.Thread):
                 self.device_boot_id = boot_id
                 self.device_id = str(payload.get("deviceId", ""))
                 self.device_rssi = payload.get("rssi")
-                has_backlog, accepted_samples = self._consume_samples(payload, received_at_ms)
+                signal_quality = int(payload.get("poorSignal", self.last_signal_quality))
+                contact_changed, contact_blocked, contact_status, quality_level = self._update_contact_state(
+                    signal_quality
+                )
+                has_backlog, accepted_samples = self._consume_samples(
+                    payload,
+                    received_at_ms,
+                    accept_samples=not contact_blocked,
+                )
+                if contact_changed and contact_blocked:
+                    self._publish({
+                        **self.status_payload(status=contact_status),
+                        "signal_quality": signal_quality,
+                        "quality_level": quality_level,
+                    })
                 if accepted_samples:
                     self._publish({
                         "workerId": self.worker_id,
                         "baseUrl": self.base_url,
                         "status": "online",
                         "payload_type": "raw_wave",
+                        "signal_quality": signal_quality,
+                        "quality_level": quality_level,
                         "raw_wave_original": accepted_samples,
                         "raw_wave_original_fs": RAW_FS,
                         "sample_cursor": self.sample_cursor,

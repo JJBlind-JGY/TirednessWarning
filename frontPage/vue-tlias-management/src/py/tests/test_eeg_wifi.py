@@ -162,6 +162,46 @@ class WifiEegWorkerTests(unittest.TestCase):
         self.assertEqual(first, [10, 11, 12])
         self.assertEqual(second, [13])
 
+    def test_no_contact_advances_cursor_without_buffering_wave(self):
+        worker = self.make_worker()
+        no_contact = payload(0, [10, 11, 12])
+        no_contact["poorSignal"] = 200
+        _, blocked, status, quality = worker._update_contact_state(no_contact["poorSignal"])
+        _, accepted = worker._consume_samples(no_contact, 10_000, accept_samples=not blocked)
+        self.assertTrue(blocked)
+        self.assertEqual(status, "no_contact")
+        self.assertEqual(quality, "no_contact")
+        self.assertEqual(accepted, [])
+        self.assertEqual(worker.sample_cursor, 3)
+        self.assertEqual(list(worker.raw_buffer), [])
+        self.assertEqual(list(worker.raw_tgam_history), [])
+
+    def test_poor_signal_clears_existing_wave(self):
+        worker = self.make_worker()
+        worker._consume_samples(payload(0, [1, 2, 3]), 10_000)
+        changed, blocked, status, quality = worker._update_contact_state(107)
+        self.assertTrue(changed)
+        self.assertTrue(blocked)
+        self.assertEqual(status, "poor_signal")
+        self.assertEqual(quality, "bad_contact")
+        self.assertEqual(list(worker.raw_buffer), [])
+        self.assertEqual(worker.raw_since_last, [])
+
+    def test_contact_recovery_only_accepts_new_samples(self):
+        worker = self.make_worker()
+        blocked_payload = payload(0, [1, 2, 3])
+        blocked_payload["poorSignal"] = 200
+        worker._update_contact_state(200)
+        worker._consume_samples(blocked_payload, 10_000, accept_samples=False)
+        changed, blocked, _, quality = worker._update_contact_state(0)
+        recovered_payload = payload(3, [4, 5])
+        _, accepted = worker._consume_samples(recovered_payload, 10_100, accept_samples=not blocked)
+        self.assertTrue(changed)
+        self.assertFalse(blocked)
+        self.assertEqual(quality, "good")
+        self.assertEqual(accepted, [4, 5])
+        self.assertEqual(list(worker.raw_buffer), [4, 5])
+
     def test_synchronize_workers_starts_all_enabled_devices(self):
         devices = [
             {"workerId": 1, "value": 1, "name": "one", "baseUrl": "http://127.0.0.1:1", "enabled": True},

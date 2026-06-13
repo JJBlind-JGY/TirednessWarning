@@ -1,5 +1,7 @@
 ﻿import * as echarts from 'echarts'
 
+import { isInvalidEegContact } from './eegContact'
+
 const RAW_WAVE_FS = 512
 const RAW_WAVE_LIMIT = RAW_WAVE_FS * 4
 const EMOTION_TEXT = {
@@ -243,6 +245,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   function updateEegData(binding, payload) {
     const status = payload.status || 'ok'
     const statusText = payload.message || payload.error || ''
+    const invalidContact = isInvalidEegContact(payload)
     const offlineStatuses = new Set(['offline', 'error', 'reconnecting'])
     if (offlineStatuses.has(status)) {
       const retryWorkerId = payload.workerId ?? binding.activeWorkerId ?? binding.workerId
@@ -251,6 +254,27 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
         statusText: statusText || (status === 'error' ? '脑电连接失败，自动重连中' : '脑电离线，自动重连中')
       })
       if (retryWorkerId != null) scheduleWorkerRetry(retryWorkerId)
+      return
+    }
+
+    if (invalidContact) {
+      binding.eegRunning = true
+      binding.eegStatus = status === 'no_contact' || payload.quality_level === 'no_contact'
+        ? 'no_contact'
+        : 'poor_signal'
+      binding.eegQualityLevel = payload.quality_level || ''
+      binding.signalQuality = payload.signal_quality ?? null
+      binding.eegStatusText = binding.eegStatus === 'no_contact'
+        ? '设备在线，等待佩戴'
+        : '信号质量不佳'
+      binding.analysisTime = payload.analysis_time || binding.analysisTime
+      binding.rawWaveBuffer = []
+      binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
+      clearCurrentEegPrediction(binding)
+      updateFusionState?.(binding)
+      refreshWaveChart(binding)
+      refreshBandChart(binding)
+      evaluateWarning(binding)
       return
     }
 
