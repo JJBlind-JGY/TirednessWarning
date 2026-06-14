@@ -181,3 +181,62 @@ export function selectStateWindowSamples(
     return result
   })
 }
+
+export function normalizeFaceConfidence(value) {
+  const numeric = Number.parseFloat(String(value ?? '').replace('%', ''))
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0
+  return Math.min(1, numeric > 1 ? numeric / 100 : numeric)
+}
+
+export function selectStableEmotion(
+  samples,
+  previousEmotion = 'normal',
+  {
+    abnormalEmotions = ['fatigue', 'stress', 'anxiety', 'weakness'],
+    minSamples = 3,
+    abnormalMinCount = 2,
+    abnormalMinRatio = 0.16,
+    tieMargin = 0.08
+  } = {}
+) {
+  const counts = samples.reduce((result, sample) => {
+    if (sample.source === 'eeg') result.eeg += 1
+    if (sample.source === 'face') result.face += 1
+    return result
+  }, { eeg: 0, face: 0 })
+  if (samples.length < minSamples) {
+    return { commit: false, counts, emotion: previousEmotion || 'normal', confidence: 0, source: 'insufficient' }
+  }
+
+  const summary = samples.reduce((result, sample) => {
+    const emotion = abnormalEmotions.includes(sample.emotion) ? sample.emotion : 'normal'
+    const weight = Math.max(0, Number(sample.weight || 0))
+    result.totalWeight += weight
+    result.counts[emotion] = (result.counts[emotion] || 0) + 1
+    result.weights[emotion] = (result.weights[emotion] || 0) + weight
+    return result
+  }, { totalWeight: 0, counts: {}, weights: {} })
+  const denominator = Math.max(summary.totalWeight, 1)
+  const ranked = abnormalEmotions.map((emotion) => ({
+    emotion,
+    score: Number(summary.weights[emotion] || 0),
+    count: Number(summary.counts[emotion] || 0),
+    ratio: Number(summary.weights[emotion] || 0) / denominator
+  })).filter((item) => item.count >= abnormalMinCount && item.ratio >= abnormalMinRatio)
+    .sort((a, b) => b.ratio - a.ratio || b.score - a.score)
+
+  let selected = ranked[0] || null
+  if (selected && ranked.length > 1 && selected.ratio - ranked[1].ratio < tieMargin) {
+    selected = ranked.find((item) => item.emotion === previousEmotion) || selected
+  }
+  if (selected) {
+    return { commit: true, counts, emotion: selected.emotion, confidence: selected.ratio, source: 'segment' }
+  }
+  return {
+    commit: true,
+    counts,
+    emotion: 'normal',
+    confidence: Number(summary.weights.normal || 0) / denominator,
+    source: 'segment'
+  }
+}

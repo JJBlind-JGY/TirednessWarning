@@ -1,0 +1,259 @@
+{
+  "generatedAt": "2026-06-14T14:23:08.488Z",
+  "threshold": 59,
+  "notes": "候选依据 EEG 状态指数、过阈值次数和主导票数选择；原始 data.rar 与源样本未修改。",
+  "samples": [
+    {
+      "name": "fatigue-01",
+      "targetLabel": "fatigue",
+      "targetLabelZh": "疲劳",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/06/01/binding-1779698015145-uwpxxi-1780285036258-fusion-abnormal",
+      "validPredictionCount": 11,
+      "averageIndex": 74.67,
+      "maxIndex": 84.05,
+      "thresholdCounts": {
+        "fatigue": 11,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 10
+      },
+      "dominantVotes": {
+        "fatigue": 11,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 0
+      }
+    },
+    {
+      "name": "fatigue-02",
+      "targetLabel": "fatigue",
+      "targetLabelZh": "疲劳",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/05/27/binding-1779698015145-uwpxxi-1779850938736-fusion-abnormal",
+      "validPredictionCount": 10,
+      "averageIndex": 73.96,
+      "maxIndex": 91.35,
+      "thresholdCounts": {
+        "fatigue": 10,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 10
+      },
+      "dominantVotes": {
+        "fatigue": 10,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 0
+      }
+    },
+    {
+      "name": "fatigue-03",
+      "targetLabel": "fatigue",
+      "targetLabelZh": "疲劳",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/05/27/binding-1779698015145-uwpxxi-1779851263737-fusion-abnormal",
+      "validPredictionCount": 10,
+      "averageIndex": 71.23,
+      "maxIndex": 78.55,
+      "thresholdCounts": {
+        "fatigue": 10,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 9
+      },
+      "dominantVotes": {
+        "fatigue": 10,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 0
+      }
+    },
+    {
+      "name": "stress-01",
+      "targetLabel": "stress",
+      "targetLabelZh": "紧张",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/06/01/binding-1779698015145-uwpxxi-1780303726141-fusion-abnormal",
+      "validPredictionCount": 10,
+      "averageIndex": 81.98,
+      "maxIndex": 89.71,
+      "thresholdCounts": {
+        "fatigue": 0,
+        "stress": 10,
+        "anxiety": 10,
+        "weakness": 0
+      },
+      "dominantVotes": {
+        "fatigue": 0,
+        "stress": 9,
+        "anxiety": 1,
+        "weakness": 0
+      }
+    },
+    {
+      "name": "stress-02",
+      "targetLabel": "stress",
+      "targetLabelZh": "紧张",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/05/27/binding-1779698015145-uwpxxi-1779876765761-fusion-abnormal",
+      "validPredictionCount": 10,
+      "averageIndex": 78.36,
+      "maxIndex": 85.64,
+      "thresholdCounts": {
+        "fatigue": 0,
+        "stress": 10,
+        "anxiety": 10,
+        "weakness": 0
+      },
+      "dominantVotes": {
+        "fatigue": 0,
+        "stress": 10,
+        "anxiety": 0,
+        "weakness": 0
+      }
+    },
+    {
+      "name": "stress-03",
+      "targetLabel": "stress",
+      "targetLabelZh": "紧张",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/05/27/binding-1779698015145-uwpxxi-1779851618736-fusion-abnormal",
+      "validPredictionCount": 10,
+      "averageIndex": 71.05,
+      "maxIndex": 78.63,
+      "thresholdCounts": {
+        "fatigue": 0,
+        "stress": 10,
+        "anxiety": 9,
+        "weakness": 0
+      },
+      "dominantVotes": {
+        "fatigue": 0,
+        "stress": 10,
+        "anxiety": 0,
+        "weakness": 0
+      }
+    },
+    {
+      "name": "anxiety-01",
+      "targetLabel": "anxiety",
+      "targetLabelZh": "焦虑",
+      "sourcePath": ".test-tmp/data-rar-inspect/normal-samples/2026/06/01/binding-1779698015145-uwpxxi-1780289836241-normal-sample",
+      "validPredictionCount": 10,
+      "averageIndex": 59.01,
+      "maxIndex": 62.52,
+      "thresholdCounts": {
+        "fatigue": 0,
+        "stress": 3,
+        "anxiety": 6,
+        "weakness": 0
+      },
+      "dominantVotes": {
+        "fatigue": 0,
+        "stress": 0,
+        "anxiety": 6,
+        "weakness": 0
+      }
+    },
+    {
+      "name": "anxiety-02",
+      "targetLabel": "anxiety",
+      "targetLabelZh": "焦虑",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/06/01/binding-1779698015145-uwpxxi-1780289821241-fusion-abnormal",
+      "validPredictionCount": 10,
+      "averageIndex": 54.95,
+      "maxIndex": 66.23,
+      "thresholdCounts": {
+        "fatigue": 0,
+        "stress": 2,
+        "anxiety": 3,
+        "weakness": 0
+      },
+      "dominantVotes": {
+        "fatigue": 0,
+        "stress": 0,
+        "anxiety": 3,
+        "weakness": 0
+      }
+    },
+    {
+      "name": "anxiety-03",
+      "targetLabel": "anxiety",
+      "targetLabelZh": "焦虑",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/06/01/binding-1779698015145-uwpxxi-1780303752145-fusion-abnormal",
+      "validPredictionCount": 10,
+      "averageIndex": 64.47,
+      "maxIndex": 73.65,
+      "thresholdCounts": {
+        "fatigue": 0,
+        "stress": 8,
+        "anxiety": 8,
+        "weakness": 0
+      },
+      "dominantVotes": {
+        "fatigue": 0,
+        "stress": 6,
+        "anxiety": 2,
+        "weakness": 0
+      }
+    },
+    {
+      "name": "weakness-01",
+      "targetLabel": "weakness",
+      "targetLabelZh": "虚弱",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/05/27/binding-1779698015145-uwpxxi-1779876123770-fusion-abnormal",
+      "validPredictionCount": 10,
+      "averageIndex": 72.21,
+      "maxIndex": 77.75,
+      "thresholdCounts": {
+        "fatigue": 9,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 10
+      },
+      "dominantVotes": {
+        "fatigue": 1,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 9
+      }
+    },
+    {
+      "name": "weakness-02",
+      "targetLabel": "weakness",
+      "targetLabelZh": "虚弱",
+      "sourcePath": ".test-tmp/data-rar-inspect/abnormal-samples/2026/05/27/binding-1779698015145-uwpxxi-1779876098203-fusion-abnormal",
+      "validPredictionCount": 11,
+      "averageIndex": 67.31,
+      "maxIndex": 72.09,
+      "thresholdCounts": {
+        "fatigue": 9,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 11
+      },
+      "dominantVotes": {
+        "fatigue": 0,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 11
+      }
+    },
+    {
+      "name": "weakness-03",
+      "targetLabel": "weakness",
+      "targetLabelZh": "虚弱",
+      "sourcePath": ".test-tmp/data-rar-inspect/normal-samples/2026/05/27/binding-1779698015145-uwpxxi-1779850277736-normal-sample",
+      "validPredictionCount": 10,
+      "averageIndex": 65.09,
+      "maxIndex": 67.42,
+      "thresholdCounts": {
+        "fatigue": 0,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 10
+      },
+      "dominantVotes": {
+        "fatigue": 0,
+        "stress": 0,
+        "anxiety": 0,
+        "weakness": 10
+      }
+    }
+  ]
+}

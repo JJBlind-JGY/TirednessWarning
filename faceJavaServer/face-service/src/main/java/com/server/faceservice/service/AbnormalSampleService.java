@@ -325,6 +325,11 @@ public class AbnormalSampleService {
         try (FFmpegFrameRecorder recorder = new FFmpegFrameRecorder(path.toFile(), first.getWidth(), first.getHeight())) {
             recorder.setFormat("mp4");
             recorder.setVideoCodec(avcodec.AV_CODEC_ID_H264);
+            recorder.setPixelFormat(org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P);
+            recorder.setVideoOption("colorspace", "bt709");
+            recorder.setVideoOption("color_primaries", "bt709");
+            recorder.setVideoOption("color_trc", "bt709");
+            recorder.setVideoOption("color_range", "tv");
             recorder.setFrameRate(effectiveFps);
             recorder.setVideoBitrate(700_000);
             recorder.start();

@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   countContinuousStateRuns,
+  normalizeFaceConfidence,
+  selectStableEmotion,
   selectStateWindowSamples,
   summarizeBehaviorSegment,
   summarizeMaxContinuousStateDuration,
@@ -114,4 +116,41 @@ test('diagnostic sample window contains only the fatigue decision window', () =>
     { timestamp: 1000, offsetMs: 0, closed: true, closedScore: 90 },
     { timestamp: 20000, offsetMs: 19000, closed: true, closedScore: 95 }
   ])
+})
+
+test('face confidence at 38 percent is accepted by the fusion threshold', () => {
+  assert.equal(normalizeFaceConfidence(38) >= 0.38, true)
+  assert.equal(normalizeFaceConfidence('38%') >= 0.38, true)
+})
+
+test('face confidence below 38 percent is ignored by the fusion threshold', () => {
+  assert.equal(normalizeFaceConfidence(37.9) >= 0.38, false)
+})
+
+test('two abnormal samples above a 16 percent weighted ratio trigger the segment', () => {
+  const result = selectStableEmotion([
+    { source: 'eeg', emotion: 'fatigue', weight: 1 },
+    { source: 'eeg', emotion: 'fatigue', weight: 1 },
+    ...Array.from({ length: 9 }, () => ({ source: 'eeg', emotion: 'normal', weight: 1 }))
+  ])
+  assert.equal(result.emotion, 'fatigue')
+  assert.equal(result.confidence >= 0.16, true)
+})
+
+test('two abnormal samples below 16 percent remain normal', () => {
+  const result = selectStableEmotion([
+    { source: 'face', emotion: 'fatigue', weight: 0.8 },
+    { source: 'face', emotion: 'fatigue', weight: 0.8 },
+    ...Array.from({ length: 9 }, () => ({ source: 'eeg', emotion: 'normal', weight: 1 }))
+  ])
+  assert.equal(result.emotion, 'normal')
+})
+
+test('one abnormal sample cannot trigger the segment', () => {
+  const result = selectStableEmotion([
+    { source: 'eeg', emotion: 'stress', weight: 1 },
+    { source: 'eeg', emotion: 'normal', weight: 1 },
+    { source: 'face', emotion: 'normal', weight: 0.8 }
+  ])
+  assert.equal(result.emotion, 'normal')
 })

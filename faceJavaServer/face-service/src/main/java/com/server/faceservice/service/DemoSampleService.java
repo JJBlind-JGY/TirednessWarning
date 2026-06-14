@@ -25,6 +25,8 @@ import java.util.UUID;
 
 @Service
 public class DemoSampleService {
+    private static final double EEG_STATE_THRESHOLD = 59.0;
+    private static final List<String> EEG_STATE_KEYS = List.of("fatigue", "stress", "anxiety", "weakness");
     private static final List<String> REQUIRED_FILES = List.of(
             "manifest.json",
             "video/face.mp4",
@@ -122,6 +124,10 @@ public class DemoSampleService {
             detail.put("rawTgam", buildRawTgam(rawTgam));
             detail.put("latestEeg", latestEeg == null ? Map.of() : objectMapper.convertValue(latestEeg, Map.class));
             detail.put("eegTimeline", buildEegTimeline(eegPredictions));
+            Map<String, Object> windowSummary = buildEegWindowSummary(eegPredictions);
+            detail.put("thresholdCounts", windowSummary.get("thresholdCounts"));
+            detail.put("dominantVotes", windowSummary.get("dominantVotes"));
+            detail.put("validPredictionCount", windowSummary.get("validPredictionCount"));
             detail.put("latestFace", latestFace == null ? Map.of() : objectMapper.convertValue(latestFace, Map.class));
             return detail;
         } catch (IOException e) {
@@ -300,10 +306,82 @@ public class DemoSampleService {
             item.put("time", readPredictionTime(prediction));
             item.put("emotion", prediction.path("emotion").asText(""));
             item.put("emotionZh", prediction.path("emotion_zh").asText(""));
-            item.put("raw_powers", objectMapper.convertValue(prediction.path("raw_powers"), Map.class));
+            item.put("raw_powers", readObject(prediction, "raw_powers"));
+            item.put("indices", readObject(prediction, "indices"));
+            item.put("features", readObject(prediction, "features"));
+            item.put("reason_codes", readArray(prediction, "reason_codes"));
+            item.put("quality_level", prediction.path("quality_level").asText(""));
+            item.put("signal_quality", prediction.path("signal_quality").isNumber()
+                    ? prediction.path("signal_quality").numberValue()
+                    : null);
+            item.put("valid_current", prediction.path("valid_current").asBoolean(false));
+            item.put("attention", prediction.path("attention").isNumber()
+                    ? prediction.path("attention").numberValue()
+                    : null);
+            item.put("meditation", prediction.path("meditation").isNumber()
+                    ? prediction.path("meditation").numberValue()
+                    : null);
             result.add(item);
         }
         return result;
+    }
+
+    private Map<String, Object> buildEegWindowSummary(List<JsonNode> predictions) {
+        Map<String, Integer> thresholdCounts = zeroStateCounts();
+        Map<String, Integer> dominantVotes = zeroStateCounts();
+        int validPredictionCount = 0;
+
+        for (JsonNode prediction : predictions) {
+            if (!prediction.path("valid_current").asBoolean(false)) {
+                continue;
+            }
+            JsonNode indices = prediction.path("indices");
+            if (!indices.isObject()) {
+                continue;
+            }
+            validPredictionCount += 1;
+            String dominantState = null;
+            double dominantValue = Double.NEGATIVE_INFINITY;
+            for (String state : EEG_STATE_KEYS) {
+                JsonNode valueNode = indices.path(state + "_idx");
+                if (!valueNode.isNumber()) {
+                    continue;
+                }
+                double value = valueNode.asDouble();
+                if (value >= EEG_STATE_THRESHOLD) {
+                    thresholdCounts.put(state, thresholdCounts.get(state) + 1);
+                    if (value > dominantValue) {
+                        dominantValue = value;
+                        dominantState = state;
+                    }
+                }
+            }
+            if (dominantState != null) {
+                dominantVotes.put(dominantState, dominantVotes.get(dominantState) + 1);
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("thresholdCounts", thresholdCounts);
+        result.put("dominantVotes", dominantVotes);
+        result.put("validPredictionCount", validPredictionCount);
+        return result;
+    }
+
+    private Map<String, Integer> zeroStateCounts() {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        EEG_STATE_KEYS.forEach(state -> result.put(state, 0));
+        return result;
+    }
+
+    private Map<String, Object> readObject(JsonNode source, String field) {
+        JsonNode value = source.path(field);
+        return value.isObject() ? objectMapper.convertValue(value, Map.class) : Map.of();
+    }
+
+    private List<Object> readArray(JsonNode source, String field) {
+        JsonNode value = source.path(field);
+        return value.isArray() ? objectMapper.convertValue(value, List.class) : List.of();
     }
 
     private long readPredictionTime(JsonNode prediction) {

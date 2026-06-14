@@ -4,6 +4,8 @@ import { createEegMonitor } from './useAlertEeg'
 import { createFaceMonitor } from './useAlertFace'
 import { normalizeCameraRecord } from './monitorDeviceConfig'
 import {
+  normalizeFaceConfidence,
+  selectStableEmotion,
   selectStateWindowSamples,
   summarizeBehaviorSegment as summarizeBehaviorSamples
 } from './behaviorFusion'
@@ -29,10 +31,10 @@ const STABLE_STATE_SEGMENT_MS = 20000
 const EEG_SAMPLE_WEIGHT = 1
 const FACE_SAMPLE_WEIGHT = 0.8
 const FACE_FATIGUE_BOOST = 0.2
-const FACE_MIN_CONFIDENCE = 0.5
+const FACE_MIN_CONFIDENCE = 0.38
 const SEGMENT_MIN_SAMPLES = 3
 const ABNORMAL_MIN_COUNT = 2
-const ABNORMAL_MIN_RATIO = 0.18
+const ABNORMAL_MIN_RATIO = 0.16
 const STABLE_TIE_MARGIN = 0.08
 const EMPTY_SEGMENTS_BEFORE_WAITING = 2
 const EYE_WINDOW_MS = 20000
@@ -837,7 +839,7 @@ function recordLatestSensorSamples(binding, now = Date.now()) {
     binding.lastRecordedEegSampleAt = binding.lastValidEegAt
   }
 
-  const faceConfidence = Math.min(1, Math.max(0, Number(binding.lastValidFaceScore || 0) / 100))
+  const faceConfidence = normalizeFaceConfidence(binding.lastValidFaceScore)
   if (hasFreshFace(binding, now) && binding.lastValidFaceAt !== binding.lastRecordedFaceSampleAt && faceConfidence >= FACE_MIN_CONFIDENCE) {
     pushStateSample(binding, {
       source: 'face',
@@ -848,32 +850,6 @@ function recordLatestSensorSamples(binding, now = Date.now()) {
     })
     binding.lastRecordedFaceSampleAt = binding.lastValidFaceAt
   }
-}
-
-function summarizeSamples(samples) {
-  return samples.reduce((summary, sample) => {
-    const emotion = normalizeEmotionKey(sample.emotion)
-    summary.totalWeight += Number(sample.weight || 0)
-    summary.counts[emotion] = (summary.counts[emotion] || 0) + 1
-    summary.weights[emotion] = (summary.weights[emotion] || 0) + Number(sample.weight || 0)
-    return summary
-  }, { totalWeight: 0, counts: {}, weights: {} })
-}
-
-function keepPreviousOnCloseRace(binding, ranked) {
-  if (!ranked.length) return null
-  if (ranked.length < 2) return ranked[0]
-  const [first, second] = ranked
-  if (first.ratio - second.ratio >= STABLE_TIE_MARGIN) return first
-  return ranked.find((item) => item.emotion === binding.stableEmotion) || first
-}
-
-function getSampleCounts(samples) {
-  return samples.reduce((counts, sample) => {
-    if (sample.source === 'eeg') counts.eeg += 1
-    if (sample.source === 'face') counts.face += 1
-    return counts
-  }, { eeg: 0, face: 0 })
 }
 
 function summarizeBehaviorSegment(binding, segmentStart, segmentEnd) {
@@ -887,34 +863,25 @@ function summarizeBehaviorSegment(binding, segmentStart, segmentEnd) {
 }
 
 function chooseStableSegmentEmotion(binding, samples, segmentStart = 0, segmentEnd = 0) {
-  const counts = getSampleCounts(samples)
   const behavior = segmentStart && segmentEnd ? summarizeBehaviorSegment(binding, segmentStart, segmentEnd) : null
   if (segmentStart && segmentEnd) {
     if (behavior.maxContinuousClosedMs >= BEHAVIOR_FATIGUE_CLOSED_MS || behavior.yawnCount >= 1) {
+      const counts = samples.reduce((result, sample) => {
+        if (sample.source === 'eeg') result.eeg += 1
+        if (sample.source === 'face') result.face += 1
+        return result
+      }, { eeg: 0, face: 0 })
       return { commit: true, counts, emotion: 'fatigue', confidence: 1, source: 'behavior', behavior }
     }
   }
-  if (samples.length < SEGMENT_MIN_SAMPLES) {
-    return { commit: false, counts, emotion: binding.stableEmotion || 'normal', confidence: binding.stableConfidence / 100, source: 'insufficient' }
-  }
-
-  const summary = summarizeSamples(samples)
-  const denominator = Math.max(summary.totalWeight, 1)
-  const ranked = ABNORMAL_EMOTIONS.map((emotion) => ({
-    emotion,
-    score: Number(summary.weights[emotion] || 0),
-    count: Number(summary.counts[emotion] || 0),
-    ratio: Number(summary.weights[emotion] || 0) / denominator
-  })).filter((item) => item.count >= ABNORMAL_MIN_COUNT && item.ratio >= ABNORMAL_MIN_RATIO)
-    .sort((a, b) => b.ratio - a.ratio || b.score - a.score)
-  const selected = keepPreviousOnCloseRace(binding, ranked)
-  if (selected) return { commit: true, counts, emotion: selected.emotion, confidence: selected.ratio, source: 'segment', behavior }
   return {
-    commit: true,
-    counts,
-    emotion: 'normal',
-    confidence: Number(summary.weights.normal || 0) / denominator,
-    source: 'segment',
+    ...selectStableEmotion(samples, binding.stableEmotion, {
+      abnormalEmotions: ABNORMAL_EMOTIONS,
+      minSamples: SEGMENT_MIN_SAMPLES,
+      abnormalMinCount: ABNORMAL_MIN_COUNT,
+      abnormalMinRatio: ABNORMAL_MIN_RATIO,
+      tieMargin: STABLE_TIE_MARGIN
+    }),
     behavior
   }
 }
