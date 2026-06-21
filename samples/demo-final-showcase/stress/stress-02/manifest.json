@@ -1,0 +1,40 @@
+﻿{
+    "videoEnd":  1780395660949,
+    "videoComplete":  false,
+    "sampleType":  "abnormal",
+    "videoStart":  1780395651068,
+    "eegRawWindowStart":  1780395651067,
+    "videoFrameCount":  119,
+    "videoExportFps":  15,
+    "videoCoverageMs":  9881,
+    "eegRawComplete":  true,
+    "eegRawWindowEnd":  1780395660972,
+    "missing":  [
+                    "video_incomplete"
+                ],
+    "windowEnd":  1780395660976,
+    "timestamp":  1780395660976,
+    "eegRawCount":  5139,
+    "eventId":  "binding-1779698015145-uwpxxi-1780395660976-fusion-abnormal-split-1779876765761",
+    "workerId":  2,
+    "alertType":  "demo_split_stress",
+    "windowStart":  1780395650976,
+    "message":  "分离筛选展示样本：脑电与面部特征共同展示紧张",
+    "videoExpectedFrameCount":  150,
+    "version":  1,
+    "eegRawFs":  512,
+    "personName":  "员工1",
+    "windowMs":  10000,
+    "facePredictionCount":  10,
+    "emotion":  "stress",
+    "cameraId":  "camera_01",
+    "eegPayloadCount":  10,
+    "personId":  "person-1779699787919",
+    "partial":  true,
+    "splitSources":  {
+                         "eegSampleId":  "1779876765761",
+                         "faceSampleId":  "1780395660976",
+                         "eegSourcePath":  ".test-tmp/data-rar-inspect/abnormal-samples/2026/05/27/binding-1779698015145-uwpxxi-1779876765761-fusion-abnormal",
+                         "faceSourcePath":  ".test-tmp/data-rar-inspect/abnormal-samples/2026/06/02/binding-1779698015145-uwpxxi-1780395660976-fusion-abnormal"
+                     }
+}

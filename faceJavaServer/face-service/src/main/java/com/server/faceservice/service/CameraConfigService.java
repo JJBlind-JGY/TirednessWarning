@@ -20,8 +20,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -69,7 +71,7 @@ public class CameraConfigService {
                     return imported;
                 }
             }
-            saveGo2RtcConfig(normalized);
+            validateNoConflicts(normalized);
             return normalized;
         } catch (IOException e) {
             throw new IllegalStateException("Failed to read camera config: " + configPath, e);
@@ -86,6 +88,8 @@ public class CameraConfigService {
         if (existing.isPresent()) {
             CameraConfig target = existing.get();
             target.setName(normalized.getName());
+            target.setSourceType(normalized.getSourceType());
+            target.setDeviceIndex(normalized.getDeviceIndex());
             target.setRtspUrl(normalized.getRtspUrl());
             target.setStreamName(normalized.getStreamName());
         } else {
@@ -142,15 +146,43 @@ public class CameraConfigService {
 
     private void save(List<CameraConfig> cameras) {
         try {
+            validateNoConflicts(cameras);
             Path parent = configPath.toAbsolutePath().getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(configPath.toFile(), cameras);
-            saveGo2RtcConfig(cameras);
+            trySaveGo2RtcConfig(cameras);
             syncGo2RtcRuntime(cameras);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to write camera config: " + configPath, e);
+        }
+    }
+
+    void validateNoConflicts(List<CameraConfig> cameras) {
+        Set<String> ids = new HashSet<>();
+        Set<String> streamNames = new HashSet<>();
+        Set<Integer> localDeviceIndexes = new HashSet<>();
+
+        for (CameraConfig camera : cameras) {
+            CameraConfig normalized = normalize(camera);
+            if (!ids.add(normalized.getId())) {
+                throw new IllegalArgumentException("Duplicate camera id: " + normalized.getId());
+            }
+
+            String streamName = StringUtils.hasText(normalized.getStreamName())
+                    ? normalized.getStreamName()
+                    : normalized.getId();
+            if (!streamNames.add(streamName)) {
+                throw new IllegalArgumentException("Duplicate go2rtc stream name: " + streamName);
+            }
+
+            if (normalized.isLocal()) {
+                int deviceIndex = normalized.getDeviceIndex() == null ? 0 : normalized.getDeviceIndex();
+                if (!localDeviceIndexes.add(deviceIndex)) {
+                    throw new IllegalArgumentException("Local camera deviceIndex " + deviceIndex + " is already configured");
+                }
+            }
         }
     }
 
@@ -183,6 +215,20 @@ public class CameraConfigService {
         yaml.append("api:\n");
         yaml.append("  listen: :1984\n");
         Files.writeString(go2rtcConfigPath, yaml.toString());
+    }
+
+    private boolean trySaveGo2RtcConfig(List<CameraConfig> cameras) {
+        try {
+            saveGo2RtcConfig(cameras);
+            return true;
+        } catch (IOException e) {
+            log.warn(
+                    "Failed to write go2rtc config file: {}. The runtime stream sync will still be attempted.",
+                    go2rtcConfigPath.toAbsolutePath(),
+                    e
+            );
+            return false;
+        }
     }
 
     private List<CameraConfig> loadGo2RtcStreams() {

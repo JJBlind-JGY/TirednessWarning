@@ -16,6 +16,7 @@ const BAND_LABELS = ['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']
 const DEFAULT_BAND_SNAPSHOT = { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }
 const DEFAULT_INDICES = { anxiety_idx: 0, stress_idx: 0, fatigue_idx: 0, weakness_idx: 0 }
 const EEG_RETRY_DELAY_MS = 2000
+const EEG_VISUAL_WINDOW_POINTS = 20
 
 export function createEegMonitor({ state, getBindingById, getDeviceLabel, evaluateWarning, updateFusionState }) {
   const waveChartRefs = new Map()
@@ -228,6 +229,38 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     }
   }
 
+  function appendEegVisualSample(binding, payload) {
+    if (payload.status !== 'ok' || payload.valid_current !== true) return
+    const indices = {
+      anxiety_idx: Number(payload.indices?.anxiety_idx || 0),
+      stress_idx: Number(payload.indices?.stress_idx || 0),
+      fatigue_idx: Number(payload.indices?.fatigue_idx || 0),
+      weakness_idx: Number(payload.indices?.weakness_idx || 0)
+    }
+    const hasIndexValue = Object.values(indices).some((value) => Number.isFinite(value) && value > 0)
+    if (!hasIndexValue) return
+    if (!Array.isArray(binding.eegVisualTimeline)) binding.eegVisualTimeline = []
+    binding.eegVisualTimeline.push({
+      ts: Date.now(),
+      time: payload.analysis_time || new Date().toISOString(),
+      indices,
+      features: payload.features || {},
+      valid_current: true,
+      quality_level: payload.quality_level || '',
+      signal_quality: payload.signal_quality ?? null,
+      reason_codes: Array.isArray(payload.reason_codes) ? payload.reason_codes : []
+    })
+    if (binding.eegVisualTimeline.length > EEG_VISUAL_WINDOW_POINTS) {
+      binding.eegVisualTimeline.splice(0, binding.eegVisualTimeline.length - EEG_VISUAL_WINDOW_POINTS)
+    }
+  }
+
+  function clearEegVisualState(binding) {
+    binding.eegVisualTimeline = []
+    binding.eegFeatureWindow = []
+    binding.eegFeatureWindowSegment = null
+  }
+
   function clearCurrentEegPrediction(binding) {
     binding.lastValidEegEmotion = ''
     binding.lastValidEegAt = 0
@@ -253,6 +286,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.baselineResetAt = ''
     binding.analysisTime = ''
     binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
+    clearEegVisualState(binding)
     binding.rawWaveBuffer = []
     binding.waveScale = 1
     binding.waveDisplayAmplitude = 100
@@ -295,6 +329,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
       binding.analysisTime = payload.analysis_time || binding.analysisTime
       binding.rawWaveBuffer = []
       binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
+      clearEegVisualState(binding)
       clearCurrentEegPrediction(binding)
       updateFusionState?.(binding)
       refreshWaveChart(binding)
@@ -355,6 +390,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.bandSnapshot = getBandSnapshot(payload.raw_powers)
     binding.waveDisplayFs = Number(payload.display_wave_fs || payload.raw_wave_original_fs || payload.wave_fs || binding.waveDisplayFs || DEFAULT_WAVE_FS)
     if (!payload.raw_wave_original_live_published) appendRawWave(binding, displayWave)
+    appendEegVisualSample(binding, payload)
 
     if (payload.status === 'ok' && payload.valid_current === true) {
       binding.lastValidEegEmotion = binding.eegEmotion

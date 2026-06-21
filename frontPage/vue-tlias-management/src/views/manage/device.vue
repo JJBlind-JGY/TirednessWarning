@@ -91,6 +91,10 @@ async function submitCameraForm() {
     ElMessage.warning('请填写 RTSP 地址')
     return
   }
+  if (hasLocalCameraIndexConflict()) {
+    ElMessage.warning(`本机摄像头索引 ${cameraForm.deviceIndex} 已被其他通道使用`)
+    return
+  }
 
   const payload = {
     id: cameraForm.id,
@@ -118,6 +122,17 @@ async function submitCameraForm() {
   } catch (error) {
     ElMessage.error('摄像头设备保存失败，请确认 face-service 已启动')
   }
+}
+
+function hasLocalCameraIndexConflict() {
+  if (cameraForm.sourceType !== 'local') return false
+  const currentId = cameraForm.originalId || cameraForm.id
+  const currentIndex = Number(cameraForm.deviceIndex ?? 0)
+  return CAMERA_OPTIONS.some((camera) => (
+    camera.id !== currentId
+    && camera.sourceType === 'local'
+    && Number(camera.deviceIndex ?? 0) === currentIndex
+  ))
 }
 
 function editEegRow(row) {

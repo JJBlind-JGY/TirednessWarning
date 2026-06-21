@@ -196,7 +196,7 @@ function createBinding(seed = 1) {
     stableSampleCounts: { eeg: 0, face: 0 }, emptyStableSegments: 0,
     lastFatigueDiagnosticAt: 0,
     analysisTime: '', calibrationProgress: 0, baselineResetReason: '', baselineResetAt: '',
-    indices: { anxiety_idx: 0, stress_idx: 0, fatigue_idx: 0, weakness_idx: 0 }, probs: {},
+    indices: { anxiety_idx: 0, stress_idx: 0, fatigue_idx: 0, weakness_idx: 0 }, probs: {}, eegVisualTimeline: [], eegFeatureWindow: [], eegFeatureWindowSegment: null, eegVisualPage: 'indices',
     bandSnapshot: { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }, rawWaveBuffer: [], waveScale: 1, waveDisplayFs: 128, waveDisplayAmplitude: 100,
     waveReferenceStartedAt: 0, waveReferencePeaks: [], waveReferenceAmplitude: 0,
     faceConnected: false, faceImageUrl: '', faceStatusText: '待接入', faceStatus: 'idle', faceEmotion: '未识别', faceEmotionKey: '', faceScore: '--', faceRate: '--', faceRank: null, faceBox: null,
@@ -823,7 +823,10 @@ function pushStateSample(binding, sample) {
     emotion,
     ts: Number(sample.ts || Date.now()),
     weight,
-    confidence: Number(sample.confidence || 1)
+    confidence: Number(sample.confidence || 1),
+    indices: sample.indices || null,
+    features: sample.features || null,
+    reasonCodes: sample.reasonCodes || []
   })
 }
 
@@ -834,7 +837,10 @@ function recordLatestSensorSamples(binding, now = Date.now()) {
       emotion: binding.lastValidEegEmotion,
       ts: binding.lastValidEegAt,
       weight: EEG_SAMPLE_WEIGHT,
-      confidence: 1
+      confidence: 1,
+      indices: binding.indices ? { ...binding.indices } : null,
+      features: binding.features ? { ...binding.features, z: binding.features.z ? { ...binding.features.z } : undefined } : null,
+      reasonCodes: Array.isArray(binding.reasonCodes) ? [...binding.reasonCodes] : []
     })
     binding.lastRecordedEegSampleAt = binding.lastValidEegAt
   }
@@ -883,6 +889,29 @@ function chooseStableSegmentEmotion(binding, samples, segmentStart = 0, segmentE
       tieMargin: STABLE_TIE_MARGIN
     }),
     behavior
+  }
+}
+
+function syncEegFeatureWindowFromSegment(binding, segmentSamples = [], segmentStart = 0, segmentEnd = 0) {
+  const eegSamples = segmentSamples
+    .filter((sample) => sample.source === 'eeg' && sample.features && sample.indices)
+    .map((sample) => ({
+      ts: Number(sample.ts || 0),
+      time: sample.ts ? new Date(Number(sample.ts)).toISOString() : '',
+      segmentStart,
+      segmentEnd,
+      source: 'fusion_segment',
+      indices: sample.indices,
+      features: sample.features,
+      reason_codes: sample.reasonCodes || [],
+      valid_current: true
+    }))
+  binding.eegFeatureWindow = eegSamples
+  binding.eegFeatureWindowSegment = {
+    segmentStart,
+    segmentEnd,
+    eegSampleCount: eegSamples.length,
+    source: 'fusion_voting_segment'
   }
 }
 
@@ -935,6 +964,7 @@ function settleStableSegments(binding, now = Date.now()) {
     const segmentSamples = binding.stateSamples.filter((sample) => Number(sample.ts || 0) < segmentEnd)
     const remainingSamples = binding.stateSamples.filter((sample) => Number(sample.ts || 0) >= segmentEnd)
     const result = chooseStableSegmentEmotion(binding, segmentSamples, Number(binding.stableSegmentStartedAt), segmentEnd)
+    syncEegFeatureWindowFromSegment(binding, segmentSamples, Number(binding.stableSegmentStartedAt), segmentEnd)
 
     if (!segmentSamples.length && result.source !== 'behavior') {
       binding.emptyStableSegments = Number(binding.emptyStableSegments || 0) + 1

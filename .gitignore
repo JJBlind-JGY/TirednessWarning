@@ -146,3 +146,17 @@ samples/samples/weakness/binding-1779698015145-uwpxxi-1779875049763-normal-sampl
 samples/samples/weakness/binding-1779698015145-uwpxxi-1779875049763-normal-sample/video/face.mp4
 .test-tmp/
 faceJavaServer/face-service/face-service/
+
+# ========================
+# Demo sample cleanup - keep only final showcase / vedio / samples
+# ========================
+samples/anxiety-face-videos-picked/
+samples/demo-anxiety-generated/
+samples/demo-selected-face-final/
+samples/demo-selected-face-final-v2/
+samples/demo-selected-rule-aligned/
+samples/demo-selected-split/
+samples/demo-selected-v2/
+samples/demo-selected-v3/
+samples/demo-selected-v4/
+samples/demo_selected/

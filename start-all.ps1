@@ -7,6 +7,27 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+function Resolve-PythonCommand {
+    $candidates = @()
+    $candidates += "D:\project_APP\Anaconda\anaconda\envs\nanwang\python.exe"
+    if ($env:CONDA_PREFIX) {
+        $candidates += (Join-Path $env:CONDA_PREFIX "python.exe")
+    }
+    $candidates += "python"
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -eq "python") {
+            return "python"
+        }
+        if (Test-Path -LiteralPath $candidate) {
+            return "& '$candidate'"
+        }
+    }
+    return "python"
+}
+
+$PythonCommand = Resolve-PythonCommand
+
 function Join-Root {
     param([string]$RelativePath)
     return Join-Path $Root $RelativePath
@@ -133,21 +154,21 @@ Start-ServiceWindow `
 Start-ServiceWindow `
     -Name "face-python" `
     -WorkDir (Join-Root "facePythonServer") `
-    -Command "python .\websocket_server.py" `
+    -Command "$PythonCommand .\websocket_server.py" `
     -Port 8765 `
     -StartupDelaySeconds 2
 
 Start-ServiceWindow `
     -Name "face-java" `
     -WorkDir (Join-Root "faceJavaServer") `
-    -Command "mvn.cmd -pl face-service -am clean package; java -jar .\face-service\target\face-service-0.0.1-SNAPSHOT-exec.jar" `
+    -Command "mvn.cmd -f pom.xml -pl :face-service -am package -DskipTests; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }; java -jar .\face-service\target\face-service-0.0.1-SNAPSHOT-exec.jar --app.camera.config-file=config/camera-config.json" `
     -Port 8081 `
     -StartupDelaySeconds 6
 
 Start-ServiceWindow `
     -Name "eeg-python" `
     -WorkDir $Root `
-    -Command "python .\frontPage\vue-tlias-management\src\py\EEG_0417.py" `
+    -Command "$PythonCommand .\frontPage\vue-tlias-management\src\py\EEG_0417.py" `
     -Port 5000 `
     -StartupDelaySeconds 2 `
     -HealthUrl "http://127.0.0.1:5000/" `
@@ -166,7 +187,7 @@ if ($DryRun) {
     Write-Host "Dry run completed. No service windows were started."
 } else {
     Write-Host "Startup commands were issued."
-    Write-Host "Frontend: http://127.0.0.1:5173/"
+    Write-Host "Frontend: http://127.0.0.1:5173/index.html"
     Write-Host "go2rtc:   http://127.0.0.1:1984/"
     Write-Host "If Vite chooses another port, use the URL shown in the frontend-vite window."
 }

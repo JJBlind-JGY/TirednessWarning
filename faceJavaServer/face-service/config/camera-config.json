@@ -5,11 +5,4 @@
   "deviceIndex" : 0,
   "rtspUrl" : "",
   "streamName" : "local_camera_0"
-}, {
-  "id" : "camera_02",
-  "name" : "local_camera",
-  "sourceType" : "local",
-  "deviceIndex" : 0,
-  "rtspUrl" : "",
-  "streamName" : "camera_02"
 } ]

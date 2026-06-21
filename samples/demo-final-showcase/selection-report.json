@@ -1,0 +1,555 @@
+﻿{
+    "generatedAt":  "2026-06-17T23:21:13",
+    "targetRoot":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase",
+    "sourcePolicy":  "fatigue/stress/weakness from samples/demo-selected-face-final-v2; anxiety from samples/demo-anxiety-generated",
+    "requiredFiles":  [
+                          "manifest.json",
+                          "video/face.mp4",
+                          "eeg/raw_wave.json",
+                          "eeg/raw_tgam.json",
+                          "eeg/predictions.jsonl",
+                          "face/predictions.jsonl"
+                      ],
+    "items":  [
+                  {
+                      "id":  "fatigue-01",
+                      "state":  "fatigue",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\fatigue\\fatigue-01",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\fatigue\\fatigue-01",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\fatigue\\fatigue-01\\video\\face.mp4",
+                      "validPredictionCount":  11,
+                      "averageIndices":  {
+                                             "weakness":  63.76,
+                                             "anxiety":  48.03,
+                                             "stress":  42.01,
+                                             "fatigue":  74.67
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  68.36,
+                                         "anxiety":  50.94,
+                                         "stress":  46.84,
+                                         "fatigue":  84.05
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  10,
+                                              "anxiety":  0,
+                                              "stress":  0,
+                                              "fatigue":  11
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  0,
+                                            "anxiety":  0,
+                                            "stress":  0,
+                                            "fatigue":  11
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  62.5,
+                                                  "anxiety":  50.2,
+                                                  "stress":  40,
+                                                  "fatigue":  73
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "fatigue",
+                      "anxietyChecks":  null
+                  },
+                  {
+                      "id":  "fatigue-02",
+                      "state":  "fatigue",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\fatigue\\fatigue-02",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\fatigue\\fatigue-02",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\fatigue\\fatigue-02\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  66.56,
+                                             "anxiety":  45.01,
+                                             "stress":  39.38,
+                                             "fatigue":  73.96
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  74.82,
+                                         "anxiety":  47.62,
+                                         "stress":  44.12,
+                                         "fatigue":  91.35
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  10,
+                                              "anxiety":  0,
+                                              "stress":  0,
+                                              "fatigue":  10
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  0,
+                                            "anxiety":  0,
+                                            "stress":  0,
+                                            "fatigue":  10
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  64.2,
+                                                  "anxiety":  48.5,
+                                                  "stress":  39.7,
+                                                  "fatigue":  68.2
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "fatigue",
+                      "anxietyChecks":  null
+                  },
+                  {
+                      "id":  "fatigue-03",
+                      "state":  "fatigue",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\fatigue\\fatigue-03",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\fatigue\\fatigue-03",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\fatigue\\fatigue-03\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  63.14,
+                                             "anxiety":  46.24,
+                                             "stress":  41.56,
+                                             "fatigue":  71.23
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  68.03,
+                                         "anxiety":  49.19,
+                                         "stress":  45.74,
+                                         "fatigue":  78.55
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  9,
+                                              "anxiety":  0,
+                                              "stress":  0,
+                                              "fatigue":  10
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  0,
+                                            "anxiety":  0,
+                                            "stress":  0,
+                                            "fatigue":  10
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  62,
+                                                  "anxiety":  47.2,
+                                                  "stress":  39,
+                                                  "fatigue":  67.2
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "fatigue",
+                      "anxietyChecks":  null
+                  },
+                  {
+                      "id":  "stress-01",
+                      "state":  "stress",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\stress\\stress-01",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\stress\\stress-01",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\stress\\stress-01\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  17.11,
+                                             "anxiety":  77.78,
+                                             "stress":  81.98,
+                                             "fatigue":  26.74
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  39.72,
+                                         "anxiety":  84.49,
+                                         "stress":  89.71,
+                                         "fatigue":  50.1
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  0,
+                                              "anxiety":  10,
+                                              "stress":  10,
+                                              "fatigue":  0
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  0,
+                                            "anxiety":  1,
+                                            "stress":  9,
+                                            "fatigue":  0
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  24.2,
+                                                  "anxiety":  75.2,
+                                                  "stress":  87,
+                                                  "fatigue":  28
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "stress",
+                      "anxietyChecks":  null
+                  },
+                  {
+                      "id":  "stress-02",
+                      "state":  "stress",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\stress\\stress-02",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\stress\\stress-02",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\stress\\stress-02\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  14.28,
+                                             "anxiety":  70.62,
+                                             "stress":  78.36,
+                                             "fatigue":  17.11
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  23.95,
+                                         "anxiety":  76.28,
+                                         "stress":  85.64,
+                                         "fatigue":  26.58
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  0,
+                                              "anxiety":  10,
+                                              "stress":  10,
+                                              "fatigue":  0
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  0,
+                                            "anxiety":  0,
+                                            "stress":  10,
+                                            "fatigue":  0
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  16.2,
+                                                  "anxiety":  72.5,
+                                                  "stress":  88.3,
+                                                  "fatigue":  14
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "stress",
+                      "anxietyChecks":  null
+                  },
+                  {
+                      "id":  "stress-03",
+                      "state":  "stress",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\stress\\stress-03",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\stress\\stress-03",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\stress\\stress-03\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  25.36,
+                                             "anxiety":  65.78,
+                                             "stress":  71.05,
+                                             "fatigue":  29.1
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  34.61,
+                                         "anxiety":  72.39,
+                                         "stress":  78.63,
+                                         "fatigue":  35.65
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  0,
+                                              "anxiety":  9,
+                                              "stress":  10,
+                                              "fatigue":  0
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  0,
+                                            "anxiety":  0,
+                                            "stress":  10,
+                                            "fatigue":  0
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  28.5,
+                                                  "anxiety":  63.5,
+                                                  "stress":  73,
+                                                  "fatigue":  28.8
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "stress",
+                      "anxietyChecks":  null
+                  },
+                  {
+                      "id":  "anxiety-01",
+                      "state":  "anxiety",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-anxiety-generated\\anxiety\\anxiety-01",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\anxiety\\anxiety-01",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-anxiety-generated\\anxiety\\anxiety-01\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  34.08,
+                                             "anxiety":  80.8,
+                                             "stress":  57.2,
+                                             "fatigue":  35.82
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  36.8,
+                                         "anxiety":  86,
+                                         "stress":  60,
+                                         "fatigue":  38.2
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  0,
+                                              "anxiety":  10,
+                                              "stress":  3,
+                                              "fatigue":  0
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  0,
+                                            "anxiety":  10,
+                                            "stress":  0,
+                                            "fatigue":  0
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  47.2,
+                                                  "anxiety":  79.5,
+                                                  "stress":  73,
+                                                  "fatigue":  60.8
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "anxiety",
+                      "anxietyChecks":  {
+                                            "anxietyThreshold10Of10":  true,
+                                            "anxietyDominant10Of10":  true,
+                                            "anxietyContributionHighest":  true
+                                        }
+                  },
+                  {
+                      "id":  "anxiety-02",
+                      "state":  "anxiety",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-anxiety-generated\\anxiety\\anxiety-02",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\anxiety\\anxiety-02",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-anxiety-generated\\anxiety\\anxiety-02\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  34.72,
+                                             "anxiety":  80.5,
+                                             "stress":  57.1,
+                                             "fatigue":  36.1
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  36.8,
+                                         "anxiety":  87,
+                                         "stress":  61,
+                                         "fatigue":  38.2
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  0,
+                                              "anxiety":  10,
+                                              "stress":  4,
+                                              "fatigue":  0
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  0,
+                                            "anxiety":  10,
+                                            "stress":  0,
+                                            "fatigue":  0
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  47.2,
+                                                  "anxiety":  79.8,
+                                                  "stress":  73,
+                                                  "fatigue":  60.8
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "anxiety",
+                      "anxietyChecks":  {
+                                            "anxietyThreshold10Of10":  true,
+                                            "anxietyDominant10Of10":  true,
+                                            "anxietyContributionHighest":  true
+                                        }
+                  },
+                  {
+                      "id":  "anxiety-03",
+                      "state":  "anxiety",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-anxiety-generated\\anxiety\\anxiety-03",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\anxiety\\anxiety-03",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-anxiety-generated\\anxiety\\anxiety-03\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  34.08,
+                                             "anxiety":  81.1,
+                                             "stress":  57.4,
+                                             "fatigue":  36.38
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  36.8,
+                                         "anxiety":  88,
+                                         "stress":  62,
+                                         "fatigue":  38.2
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  0,
+                                              "anxiety":  10,
+                                              "stress":  4,
+                                              "fatigue":  0
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  0,
+                                            "anxiety":  10,
+                                            "stress":  0,
+                                            "fatigue":  0
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  47.2,
+                                                  "anxiety":  80.2,
+                                                  "stress":  73.7,
+                                                  "fatigue":  61
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "anxiety",
+                      "anxietyChecks":  {
+                                            "anxietyThreshold10Of10":  true,
+                                            "anxietyDominant10Of10":  true,
+                                            "anxietyContributionHighest":  true
+                                        }
+                  },
+                  {
+                      "id":  "weakness-01",
+                      "state":  "weakness",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\weakness\\weakness-01",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\weakness\\weakness-01",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\weakness\\weakness-01\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  72.21,
+                                             "anxiety":  35.65,
+                                             "stress":  32.02,
+                                             "fatigue":  67.63
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  77.75,
+                                         "anxiety":  39.3,
+                                         "stress":  36.4,
+                                         "fatigue":  77.88
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  10,
+                                              "anxiety":  0,
+                                              "stress":  0,
+                                              "fatigue":  9
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  9,
+                                            "anxiety":  0,
+                                            "stress":  0,
+                                            "fatigue":  1
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  72.8,
+                                                  "anxiety":  36.2,
+                                                  "stress":  27.3,
+                                                  "fatigue":  68.8
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "weakness",
+                      "anxietyChecks":  null
+                  },
+                  {
+                      "id":  "weakness-02",
+                      "state":  "weakness",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\weakness\\weakness-02",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\weakness\\weakness-02",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\weakness\\weakness-02\\video\\face.mp4",
+                      "validPredictionCount":  11,
+                      "averageIndices":  {
+                                             "weakness":  67.31,
+                                             "anxiety":  37.19,
+                                             "stress":  34.85,
+                                             "fatigue":  61.33
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  72.09,
+                                         "anxiety":  42.52,
+                                         "stress":  41.2,
+                                         "fatigue":  70.06
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  11,
+                                              "anxiety":  0,
+                                              "stress":  0,
+                                              "fatigue":  9
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  11,
+                                            "anxiety":  0,
+                                            "stress":  0,
+                                            "fatigue":  0
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  72.8,
+                                                  "anxiety":  36,
+                                                  "stress":  27,
+                                                  "fatigue":  68.5
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "weakness",
+                      "anxietyChecks":  null
+                  },
+                  {
+                      "id":  "weakness-03",
+                      "state":  "weakness",
+                      "source":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\weakness\\weakness-03",
+                      "target":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-final-showcase\\weakness\\weakness-03",
+                      "videoSource":  "D:\\Space_for_myself\\HUST\\NanFangDianWang_Proj\\Project\\TirednessWarning\\samples\\demo-selected-face-final-v2\\weakness\\weakness-03\\video\\face.mp4",
+                      "validPredictionCount":  10,
+                      "averageIndices":  {
+                                             "weakness":  65,
+                                             "anxiety":  44.36,
+                                             "stress":  39.67,
+                                             "fatigue":  65.38
+                                         },
+                      "maxIndices":  {
+                                         "weakness":  69.47,
+                                         "anxiety":  46.97,
+                                         "stress":  43.44,
+                                         "fatigue":  68.27
+                                     },
+                      "thresholdCounts":  {
+                                              "weakness":  10,
+                                              "anxiety":  0,
+                                              "stress":  0,
+                                              "fatigue":  10
+                                          },
+                      "dominantVotes":  {
+                                            "weakness":  5,
+                                            "anxiety":  0,
+                                            "stress":  0,
+                                            "fatigue":  5
+                                        },
+                      "featureContribution":  {
+                                                  "weakness":  67.8,
+                                                  "anxiety":  46.2,
+                                                  "stress":  36.3,
+                                                  "fatigue":  72
+                                              },
+                      "requiredFilesOk":  true,
+                      "missingOrEmptyFiles":  [
+
+                                              ],
+                      "manifestEmotion":  "weakness",
+                      "anxietyChecks":  null
+                  }
+              ]
+}

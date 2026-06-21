@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.server.faceservice.config.CameraConfig;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -76,5 +78,31 @@ class CameraConfigServiceTests {
                 CameraConfigService.streamSource(camera)
         );
         assertEquals("rtsp://127.0.0.1:8554/local?video=h264", service().modelInputUrl(camera));
+    }
+
+    @Test
+    void duplicateLocalCameraDeviceIndexIsRejected() {
+        CameraConfig first = new CameraConfig("local_a", "Local A", "local", 0, "", "local_a");
+        CameraConfig second = new CameraConfig("local_b", "Local B", "local", 0, "", "local_b");
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> service().validateNoConflicts(List.of(first, second))
+        );
+
+        assertTrue(error.getMessage().contains("deviceIndex 0"));
+    }
+
+    @Test
+    void duplicateGo2RtcStreamNameIsRejected() {
+        CameraConfig first = new CameraConfig("camera_a", "Camera A", "rtsp", 0, "rtsp://host/a", "same_stream");
+        CameraConfig second = new CameraConfig("camera_b", "Camera B", "rtsp", 0, "rtsp://host/b", "same_stream");
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> service().validateNoConflicts(List.of(first, second))
+        );
+
+        assertTrue(error.getMessage().contains("same_stream"));
     }
 }

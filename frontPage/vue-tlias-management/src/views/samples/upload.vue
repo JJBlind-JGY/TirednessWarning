@@ -3,6 +3,18 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  EEG_EMOTION_TEXT as EMOTION_TEXT,
+  EEG_FEATURE_EXPLANATIONS,
+  EEG_STATE_COLORS as STATE_COLORS,
+  EEG_STATE_KEYS as STATE_KEYS,
+  getFeatureContributionOption as buildFeatureContributionOption,
+  getRadarOption as buildRadarOption,
+  getStateFeatureProfiles,
+  getStateHeatmapOption,
+  getStateTrendOption,
+  hasZFeatureData as hasTimelineZFeatureData
+} from '@/views/alert/eegVisualHelper'
 
 const FACE_SERVICE_BASE = '/face-api/faceDetectService'
 const REQUIRED_FILES = [
@@ -15,32 +27,6 @@ const REQUIRED_FILES = [
 ]
 const DISPLAY_SECONDS = 4
 const DEFAULT_RAW_FS = 512
-const RENDER_INTERVAL_MS = 50
-const BAND_NAMES = ['delta', 'theta', 'alpha', 'beta', 'gamma']
-const BAND_LABELS = { delta: 'Delta', theta: 'Theta', alpha: 'Alpha', beta: 'Beta', gamma: 'Gamma' }
-const BAND_COLORS = { delta: '#2563eb', theta: '#0891b2', alpha: '#0f766e', beta: '#ea580c', gamma: '#7c3aed' }
-const FEATURE_NAMES = ['theta_alpha', 'theta_beta', 'theta_alpha_beta', 'engagement', 'alpha_beta', 'slow_ratio', 'beta_ratio', 'gamma_ratio']
-const FEATURE_LABELS = {
-  theta_alpha: 'θ/α',
-  theta_beta: 'θ/β',
-  theta_alpha_beta: '(θ+α)/β',
-  engagement: '参与度',
-  alpha_beta: 'α/β',
-  slow_ratio: '慢波占比',
-  beta_ratio: 'β占比',
-  gamma_ratio: 'γ占比'
-}
-const FEATURE_COLORS = ['#22d3ee', '#14b8a6', '#38bdf8', '#f59e0b', '#a78bfa', '#fb7185', '#f97316', '#8b5cf6']
-const STATE_KEYS = ['fatigue', 'stress', 'anxiety', 'weakness']
-const STATE_COLORS = { fatigue: '#ef4444', stress: '#f97316', anxiety: '#a855f7', weakness: '#3b82f6' }
-const STATE_FEATURES = {
-  fatigue: ['theta_beta', 'theta_alpha_beta', 'slow_ratio', 'engagement'],
-  stress: ['beta_ratio', 'engagement', 'gamma_ratio'],
-  anxiety: ['gamma_ratio', 'beta_ratio', 'engagement'],
-  weakness: ['slow_ratio', 'theta_alpha_beta', 'alpha_beta', 'engagement'],
-  normal: ['theta_beta', 'engagement', 'slow_ratio', 'beta_ratio']
-}
-const EMOTION_TEXT = { normal: '正常', anxiety: '焦虑', stress: '紧张', fatigue: '疲劳', weakness: '虚弱' }
 const WARNING_TEXT = {
   normal: '预警：当前状态正常',
   anxiety: '预警：检测到焦虑倾向',
@@ -53,7 +39,6 @@ const route = useRoute()
 const router = useRouter()
 const fileInputRef = ref(null)
 const videoRef = ref(null)
-const bandChartRef = ref(null)
 const gaugeChartRef = ref(null)
 const featureChartRef = ref(null)
 const heatmapChartRef = ref(null)
@@ -63,9 +48,7 @@ const uploadPercent = ref(0)
 const sample = ref(null)
 const playbackState = ref('idle')
 const rawWaveBuffer = ref([])
-const visibleBands = ref([...BAND_NAMES])
-const featureMode = ref('z')
-let bandChartInstance = null
+const visualPage = ref('indices')
 let gaugeChartInstance = null
 let featureChartInstance = null
 let heatmapChartInstance = null
@@ -94,24 +77,6 @@ const rawSampleRate = computed(() => {
     : Number(rawWave.value.waveFs || DEFAULT_RAW_FS)
 })
 const eegTimeline = computed(() => Array.isArray(sample.value?.eegTimeline) ? sample.value.eegTimeline : [])
-const currentBandSnapshot = computed(() => {
-  const visible = getVisibleTimeline()
-  const latestVisible = visible.length ? visible[visible.length - 1] : latestEeg.value
-  return getBandSnapshot(latestVisible?.raw_powers)
-})
-const currentEeg = computed(() => {
-  const visible = getVisibleTimeline()
-  return visible.length ? visible[visible.length - 1] : latestEeg.value
-})
-const currentIndices = computed(() => {
-  const source = currentEeg.value?.indices || {}
-  return {
-    fatigue: Number(source.fatigue_idx || 0),
-    stress: Number(source.stress_idx || 0),
-    anxiety: Number(source.anxiety_idx || 0),
-    weakness: Number(source.weakness_idx || 0)
-  }
-})
 const thresholdCounts = computed(() => getWindowSummary('thresholdCounts'))
 const dominantVotes = computed(() => getWindowSummary('dominantVotes'))
 const validPredictionCount = computed(() => {
@@ -119,14 +84,9 @@ const validPredictionCount = computed(() => {
   if (Number.isFinite(serverValue)) return serverValue
   return eegTimeline.value.filter((item) => item?.valid_current === true).length
 })
-const selectedFeatureNames = computed(() => STATE_FEATURES[emotionKey.value] || STATE_FEATURES.normal)
-const hasFeatureData = computed(() => eegTimeline.value.some((item) => Object.keys(item?.features || {}).length > 0))
-const featureExplanations = computed(() => [
-  { state: '疲劳', color: STATE_COLORS.fatigue, text: 'θ/β、(θ+α)/β、慢波占比升高，参与度和 β 占比下降时，疲劳倾向增强。' },
-  { state: '紧张', color: STATE_COLORS.stress, text: 'β 占比、参与度和 γ 占比同步升高时，紧张倾向增强。' },
-  { state: '焦虑', color: STATE_COLORS.anxiety, text: 'γ 占比、β 占比和参与度升高时，焦虑倾向增强。' },
-  { state: '虚弱', color: STATE_COLORS.weakness, text: '慢波占比、(θ+α)/β、α/β 升高且活跃度下降时，虚弱倾向增强。' }
-])
+const hasZFeatureData = computed(() => hasTimelineZFeatureData(eegTimeline.value))
+const featureExplanations = computed(() => EEG_FEATURE_EXPLANATIONS)
+const stateFeatureProfiles = computed(() => getStateFeatureProfiles(eegTimeline.value))
 const emotionKey = computed(() => normalizeEmotion(manifest.value.emotion || 'normal'))
 const emotionText = computed(() => EMOTION_TEXT[emotionKey.value] || '正常')
 const warningText = computed(() => WARNING_TEXT[emotionKey.value] || WARNING_TEXT.normal)
@@ -240,6 +200,7 @@ async function loadSample(sampleId) {
 
 async function preparePlayback() {
   resetPlaybackState()
+  visualPage.value = 'indices'
   await nextTick()
   resetCharts()
   const failures = ensureCharts()
@@ -252,7 +213,6 @@ async function preparePlayback() {
 function resetPlaybackState() {
   stopPlayback()
   rawWaveBuffer.value = []
-  visibleBands.value = [...BAND_NAMES]
   displayAmplitude = 100
   lastWaveRenderAt = 0
   playedSampleCount = 0
@@ -261,8 +221,6 @@ function resetPlaybackState() {
 }
 
 function resetCharts() {
-  bandChartInstance?.dispose()
-  bandChartInstance = null
   gaugeChartInstance?.dispose()
   featureChartInstance?.dispose()
   heatmapChartInstance?.dispose()
@@ -429,167 +387,31 @@ function getWaveChartOption() {
   }
 }
 
-function getBandTrendChartOption() {
-  return {
-    color: BAND_NAMES.map((name) => BAND_COLORS[name]),
-    tooltip: { trigger: 'axis', valueFormatter: (value) => `${Number(value || 0).toFixed(1)}%` },
-    legend: { show: false },
-    grid: { left: 42, right: 20, top: 24, bottom: 28 },
-    xAxis: { type: 'category', boundaryGap: false, name: '10 秒窗口', axisLine: { lineStyle: { color: '#9db4c0' } }, data: getTimelineXAxisData() },
-    yAxis: { type: 'value', min: 0, max: 100, axisLabel: { formatter: '{value}%' }, axisLine: { show: false }, splitLine: { lineStyle: { color: '#e6eef2' } } },
-    series: getVisibleBandNames().map((name) => ({
-      name: BAND_LABELS[name],
-      type: 'line',
-      showSymbol: false,
-      smooth: true,
-      animation: false,
-      lineStyle: { width: 2, color: BAND_COLORS[name] },
-      itemStyle: { color: BAND_COLORS[name] },
-      markLine: getPlaybackMarkLine(),
-      data: getBandTrendData(name)
-    }))
-  }
-}
-
 function getGaugeChartOption() {
-  const timeline = eegTimeline.value
-  return {
-    color: STATE_KEYS.map((key) => STATE_COLORS[key]),
-    tooltip: { trigger: 'axis' },
-    legend: { top: 4 },
-    grid: { left: 48, right: 24, top: 48, bottom: 34 },
-    xAxis: { type: 'category', boundaryGap: false, data: getTimelineXAxisData(), name: '秒' },
-    yAxis: { type: 'value', min: 0, max: 100, name: '状态指数', splitLine: { lineStyle: { color: '#e8f0f4' } } },
-    series: STATE_KEYS.map((key) => ({
-      name: EMOTION_TEXT[key],
-      type: 'line',
-      smooth: true,
-      showSymbol: true,
-      symbolSize: 6,
-      lineStyle: { width: 2.5 },
-      markLine: key === 'fatigue' ? {
-        silent: true,
-        symbol: 'none',
-        data: [
-          { yAxis: 59, name: '阈值 59', lineStyle: { color: '#dc2626', type: 'dashed' }, label: { formatter: '阈值 59' } },
-          ...getPlaybackMarkLineData()
-        ]
-      } : undefined,
-      data: timeline.map((item) => Number(item?.indices?.[`${key}_idx`] || 0).toFixed(2)).map(Number)
-    }))
-  }
+  return getStateTrendOption(eegTimeline.value, {
+    cursorIndex: getPlaybackCursorIndex(),
+    cursorLabel: '播放位置'
+  })
 }
 
-function getFeatureValue(item, name) {
-  const features = item?.features || {}
-  const source = featureMode.value === 'z' ? features.z || {} : features
-  return Number(source[name] || 0)
-}
-
-function getFeatureTrendOption() {
-  return {
-    backgroundColor: 'transparent',
-    color: FEATURE_COLORS,
-    tooltip: { trigger: 'axis' },
-    legend: { type: 'scroll', top: 4 },
-    grid: { left: 48, right: 22, top: 54, bottom: 34 },
-    xAxis: { type: 'category', boundaryGap: false, data: getTimelineXAxisData(), axisLine: { lineStyle: { color: '#9db4c0' } } },
-    yAxis: {
-      type: 'value',
-      name: featureMode.value === 'z' ? '相对基线 Z-score' : '原始特征比值',
-      splitLine: { lineStyle: { color: '#e8f0f4' } }
-    },
-    series: selectedFeatureNames.value.map((name) => ({
-      name: FEATURE_LABELS[name],
-      type: 'line',
-      smooth: true,
-      showSymbol: false,
-      animation: false,
-      lineStyle: { width: 2 },
-      areaStyle: { opacity: 0.04 },
-      markLine: name === selectedFeatureNames.value[0] ? {
-        silent: true,
-        symbol: 'none',
-        data: [
-          ...(featureMode.value === 'z' ? [{ yAxis: 1, lineStyle: { type: 'dashed', color: '#f59e0b' } }] : []),
-          ...getPlaybackMarkLineData()
-        ]
-      } : undefined,
-      data: eegTimeline.value.map((item) => Number(getFeatureValue(item, name).toFixed(3)))
-    }))
-  }
+function getFeatureContributionOption() {
+  return buildFeatureContributionOption(eegTimeline.value)
 }
 
 function getHeatmapOption() {
-  const data = []
-  eegTimeline.value.forEach((item, x) => STATE_KEYS.forEach((key, y) => {
-    const value = Number(item?.indices?.[`${key}_idx`] || 0)
-    data.push({ value: [x, y, value], itemStyle: { color: value >= 59 ? STATE_COLORS[key] : '#edf3f6' } })
-  }))
-  return {
-    tooltip: { formatter: ({ value }) => `${EMOTION_TEXT[STATE_KEYS[value[1]]]}<br/>第 ${value[0] + 1} 秒：${Number(value[2]).toFixed(1)}${value[2] >= 59 ? '（过阈值）' : ''}` },
-    grid: { left: 62, right: 24, top: 18, bottom: 42 },
-    xAxis: { type: 'category', data: getTimelineXAxisData(), name: '秒', splitArea: { show: true } },
-    yAxis: { type: 'category', data: STATE_KEYS.map((key) => EMOTION_TEXT[key]), splitArea: { show: true } },
-    visualMap: {
-      show: false,
-      min: 0,
-      max: 100,
-      dimension: 2,
-      inRange: { opacity: 1 },
-      outOfRange: { opacity: 1 }
-    },
-    series: [{
-      type: 'heatmap',
-      data,
-      label: { show: true, formatter: ({ value }) => Number(value[2]).toFixed(0), color: '#334155' },
-      emphasis: { itemStyle: { shadowBlur: 8, shadowColor: 'rgba(15,118,110,.35)' } }
-    }]
-  }
+  return getStateHeatmapOption(eegTimeline.value)
 }
 
 function getRadarOption() {
-  const values = selectedFeatureNames.value.map((name) => {
-    const available = eegTimeline.value.map((item) => getFeatureValue(item, name)).filter(Number.isFinite)
-    const raw = available.length ? available.reduce((sum, value) => sum + value, 0) / available.length : 0
-    return featureMode.value === 'z' ? Math.max(0, Math.min(100, 50 + raw * 14)) : Math.max(0, Math.min(100, raw * 20))
-  })
-  const abnormalReferences = {
-    fatigue: [82, 86, 80, 32],
-    stress: [82, 78, 72],
-    anxiety: [85, 80, 76],
-    weakness: [82, 78, 75, 30],
-    normal: Array(selectedFeatureNames.value.length).fill(50)
-  }
-  return {
-    backgroundColor: 'transparent',
-    tooltip: {},
-    radar: {
-      radius: '64%',
-      indicator: selectedFeatureNames.value.map((name) => ({ name: FEATURE_LABELS[name], max: 100 })),
-      axisName: { color: '#475569' },
-      splitLine: { lineStyle: { color: '#dbe7ec' } },
-      splitArea: { areaStyle: { color: ['#fbfdfe', '#f1f7f8'] } },
-      axisLine: { lineStyle: { color: '#c7d9df' } }
-    },
-    series: [{
-      type: 'radar',
-      data: [
-        { value: Array(selectedFeatureNames.value.length).fill(50), name: '个人基线', symbol: 'none', lineStyle: { color: '#64748b', type: 'dashed', width: 1 }, areaStyle: { color: 'transparent' } },
-        { value: abnormalReferences[emotionKey.value] || abnormalReferences.normal, name: `${emotionText.value}参考方向`, symbol: 'none', lineStyle: { color: '#f59e0b', type: 'dashed', width: 2 }, areaStyle: { color: 'rgba(245,158,11,.06)' } },
-        { value: values, name: '10 秒窗口平均', lineStyle: { color: '#0f766e', width: 3 }, itemStyle: { color: '#0891b2' }, areaStyle: { color: 'rgba(20,184,166,.22)' } }
-      ]
-    }]
-  }
+  return buildRadarOption(eegTimeline.value)
 }
 
 function ensureCharts() {
   const failures = []
-  renderChartSafely('五波段趋势', ensureBandTrendChart, failures)
   renderChartSafely('状态指数趋势', ensureGaugeChart, failures)
-  renderChartSafely('关键特征趋势', ensureFeatureChart, failures)
+  renderChartSafely('特征贡献', ensureFeatureChart, failures)
   renderChartSafely('阈值矩阵', ensureHeatmapChart, failures)
-  renderChartSafely('平均特征雷达', ensureRadarChart, failures)
+  renderChartSafely('特征轮廓雷达', ensureRadarChart, failures)
   return failures
 }
 
@@ -611,8 +433,12 @@ function ensureGaugeChart() {
 }
 
 function ensureFeatureChart() {
+  if (!hasZFeatureData.value) {
+    featureChartInstance?.clear()
+    return
+  }
   if (featureChartRef.value && !featureChartInstance) featureChartInstance = echarts.init(featureChartRef.value)
-  featureChartInstance?.setOption(getFeatureTrendOption(), true)
+  featureChartInstance?.setOption(getFeatureContributionOption(), true)
   featureChartInstance?.resize()
 }
 
@@ -623,83 +449,28 @@ function ensureHeatmapChart() {
 }
 
 function ensureRadarChart() {
+  if (!hasZFeatureData.value) {
+    radarChartInstance?.clear()
+    return
+  }
   if (radarChartRef.value && !radarChartInstance) radarChartInstance = echarts.init(radarChartRef.value)
   radarChartInstance?.setOption(getRadarOption(), true)
   radarChartInstance?.resize()
 }
 
-function ensureBandTrendChart() {
-  if (!bandChartRef.value) return
-  if (!bandChartInstance) bandChartInstance = echarts.init(bandChartRef.value)
-  bandChartInstance.setOption(getBandTrendChartOption())
-  bandChartInstance.resize()
-}
-
 function refreshPlaybackCharts() {
-  renderChartSafely('五波段趋势', refreshBandTrendChart)
   renderChartSafely('状态指数趋势', ensureGaugeChart)
-  renderChartSafely('关键特征趋势', ensureFeatureChart)
   renderChartSafely('阈值矩阵', ensureHeatmapChart)
-  renderChartSafely('平均特征雷达', ensureRadarChart)
-}
-
-function refreshBandTrendChart() {
-  ensureBandTrendChart()
-  if (!bandChartInstance) return
-  bandChartInstance.setOption(getBandTrendChartOption(), true)
-  bandChartInstance.resize()
-}
-
-function getVisibleBandNames() {
-  return BAND_NAMES.filter((name) => visibleBands.value.includes(name))
-}
-
-function toggleBand(band) {
-  if (visibleBands.value.includes(band)) {
-    if (visibleBands.value.length <= 1) return
-    visibleBands.value = visibleBands.value.filter((name) => name !== band)
-  } else {
-    visibleBands.value = BAND_NAMES.filter((name) => name === band || visibleBands.value.includes(name))
+  if (hasZFeatureData.value) {
+    renderChartSafely('特征贡献', ensureFeatureChart)
+    renderChartSafely('特征轮廓雷达', ensureRadarChart)
   }
-  refreshBandTrendChart()
 }
 
-function setFeatureMode(mode) {
-  featureMode.value = mode
-  renderChartSafely('关键特征趋势', ensureFeatureChart)
-  renderChartSafely('平均特征雷达', ensureRadarChart)
-}
-
-function getTimelineXAxisData() {
-  const total = Math.max(eegTimeline.value.length, 1)
-  return Array.from({ length: total }, (_, index) => index + 1)
-}
-
-function getVisibleTimeline() {
-  if (!eegTimeline.value.length) return []
-  const count = Math.max(0, Math.min(playedTimelineCount, eegTimeline.value.length))
-  return eegTimeline.value.slice(0, count)
-}
-
-function getBandTrendData(name) {
-  return eegTimeline.value.map((item) => Number(getBandSnapshot(item?.raw_powers)[name] || 0).toFixed(2)).map(Number)
-}
-
-function padTimelineData(values) {
-  const total = eegTimeline.value.length
-  if (!total) return []
-  return [...values, ...Array.from({ length: Math.max(total - values.length, 0) }, () => null)]
-}
-
-function getBandSnapshot(rawPowers = {}) {
-  const delta = Number(rawPowers?.delta || 0)
-  const theta = Number(rawPowers?.theta || 0)
-  const alpha = Number(rawPowers?.low_alpha || 0) + Number(rawPowers?.high_alpha || 0)
-  const beta = Number(rawPowers?.low_beta || 0) + Number(rawPowers?.high_beta || 0)
-  const gamma = Number(rawPowers?.low_gamma || 0) + Number(rawPowers?.mid_gamma || 0)
-  const total = delta + theta + alpha + beta + gamma
-  if (!total) return { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }
-  return { delta: delta / total * 100, theta: theta / total * 100, alpha: alpha / total * 100, beta: beta / total * 100, gamma: gamma / total * 100 }
+async function setVisualPage(page) {
+  visualPage.value = page
+  await nextTick()
+  resizeChart()
 }
 
 function normalizeEmotion(value) {
@@ -731,21 +502,11 @@ function getPlaybackCursorIndex() {
   return Math.max(0, Math.min(eegTimeline.value.length - 1, playedTimelineCount - 1))
 }
 
-function getPlaybackMarkLineData() {
-  if (!eegTimeline.value.length) return []
-  return [{ xAxis: getPlaybackCursorIndex(), name: '播放位置', lineStyle: { color: '#0f766e', width: 2 }, label: { formatter: '播放位置' } }]
-}
-
-function getPlaybackMarkLine() {
-  return { silent: true, symbol: 'none', data: getPlaybackMarkLineData() }
-}
-
 function getFaceStatusLabel() { return sample.value ? faceStatusText.value : '待加载' }
 function getEegStatusLabel() { return sample.value ? eegStatusText.value : '待加载' }
 function getAccessText() { return sample.value ? '已接入' : '自动接入中' }
 function getPortText() { return latestEeg.value.baseUrl || '--' }
 function getCameraLabel() { return manifest.value.cameraId || '未配置摄像头' }
-function formatBand(value) { return `${Number(value || 0).toFixed(1)}%` }
 function latestTime() { return sampleTime.value || '--:--:--' }
 function adviceText() { return emotionKey.value === 'normal' ? '继续监测' : '建议关注' }
 function formatShortTime(value) {
@@ -754,7 +515,6 @@ function formatShortTime(value) {
   return date.toLocaleTimeString('zh-CN', { hour12: false })
 }
 function resizeChart() {
-  bandChartInstance?.resize()
   gaugeChartInstance?.resize()
   featureChartInstance?.resize()
   heatmapChartInstance?.resize()
@@ -766,12 +526,10 @@ onMounted(() => { if (route.query.sampleId) void loadSample(String(route.query.s
 onBeforeUnmount(() => {
   stopPlayback()
   window.removeEventListener('resize', resizeChart)
-  bandChartInstance?.dispose()
   gaugeChartInstance?.dispose()
   featureChartInstance?.dispose()
   heatmapChartInstance?.dispose()
   radarChartInstance?.dispose()
-  bandChartInstance = null
 })
 </script>
 
@@ -876,68 +634,132 @@ onBeforeUnmount(() => {
       <div class="section-heading">
         <div>
           <h2>10 秒脑电推理证据</h2>
-          <p>所有图表展示完整窗口，绿色竖线仅表示当前视频播放位置。</p>
+          <p>第一页看异常状态强弱，第二页解释脑电特征为什么支持当前样本标签。</p>
         </div>
-        <el-button-group>
-          <el-button size="small" :type="featureMode === 'z' ? 'primary' : 'default'" @click="setFeatureMode('z')">基线 Z-score</el-button>
-          <el-button size="small" :type="featureMode === 'raw' ? 'primary' : 'default'" @click="setFeatureMode('raw')">原始比值</el-button>
-        </el-button-group>
+        <div class="visual-actions">
+          <el-button-group class="page-switch">
+            <el-button :type="visualPage === 'indices' ? 'primary' : 'default'" @click="setVisualPage('indices')">异常状态指数</el-button>
+            <el-button :type="visualPage === 'features' ? 'primary' : 'default'" @click="setVisualPage('features')">脑电特征解释</el-button>
+          </el-button-group>
+        </div>
       </div>
 
-      <div class="visual-grid">
-        <article class="visual-card matrix-card">
-          <div class="visual-title"><span>四状态阈值矩阵</span><small>指数 ≥ 59 的格子按状态色高亮</small></div>
-          <div ref="heatmapChartRef" class="heatmap-chart"></div>
-        </article>
-        <article class="visual-card state-card">
-          <div class="visual-title"><span>四状态指数趋势</span><small>红色虚线为阈值 59</small></div>
-          <div ref="gaugeChartRef" class="gauge-chart"></div>
-        </article>
-        <article class="visual-card feature-card">
-          <div class="visual-title"><span>{{ emotionText }}关键特征趋势</span><small>仅展示与当前演示标签相关的特征</small></div>
-          <div ref="featureChartRef" class="feature-chart"></div>
-          <div v-if="!hasFeatureData" class="chart-empty">旧样本未包含推理特征，仍可查看状态指数和五波段</div>
-        </article>
-        <article class="visual-card radar-card">
-          <div class="visual-title"><span>10 秒平均特征雷达</span><small>对比个人基线与异常参考方向</small></div>
-          <div ref="radarChartRef" class="radar-chart"></div>
-        </article>
+      <div v-show="visualPage === 'indices'" class="visual-page">
+        <div class="page-note">
+          <strong>状态指数说明：</strong>
+          10 秒窗口内每秒计算四类状态指数，超过 59 表示该秒出现对应异常证据；主导票表示这一秒四类指数中最高的状态。
+        </div>
+        <div class="visual-grid index-grid">
+          <article class="visual-card matrix-card">
+            <div class="visual-title">
+              <span>四状态阈值热力图</span>
+              <small>颜色越深指数越高，过 59 的格子加粗高亮</small>
+            </div>
+            <div ref="heatmapChartRef" class="heatmap-chart large-chart"></div>
+            <div class="soft-legend">
+              <span>低指数</span>
+              <i class="legend-gradient"></i>
+              <span>高指数</span>
+              <em>超过 59 的格子会加粗标边</em>
+            </div>
+          </article>
+          <article class="visual-card state-card">
+            <div class="visual-title">
+              <span>四状态指数趋势</span>
+              <small>红色虚线为阈值 59，绿色竖线为播放位置</small>
+            </div>
+            <div ref="gaugeChartRef" class="gauge-chart large-chart"></div>
+          </article>
+        </div>
       </div>
 
-      <div class="explain-grid">
-        <article v-for="item in featureExplanations" :key="item.state" class="explain-card" :style="{ '--state-color': item.color }">
-          <strong>{{ item.state }}</strong>
-          <p>{{ item.text }}</p>
-        </article>
-      </div>
+      <div v-show="visualPage === 'features'" class="visual-page">
+        <div class="page-note feature-note">
+          <strong>相对基线 Z-score 说明：</strong>
+          <span v-if="hasZFeatureData">只展示个人基线换算后的相对强度；图中 50 是显示中线，表示接近个人基线，70 以上表示对应状态特征明显增强。</span>
+          <span v-else>该样本缺少个人基线 Z-score，无法展示特征解释；第一页状态指数仍可正常查看。</span>
+        </div>
+        <div v-if="hasZFeatureData" class="visual-grid feature-grid">
+          <article class="visual-card contribution-card">
+            <div class="visual-title">
+              <span>四状态特征贡献柱状图</span>
+              <small>越高表示该状态相关脑电特征越明显</small>
+            </div>
+            <div ref="featureChartRef" class="feature-chart large-chart"></div>
+          </article>
+          <article class="visual-card radar-card">
+            <div class="visual-title">
+              <span>四状态特征轮廓雷达图</span>
+              <small>看当前窗口整体更偏向哪一类异常</small>
+            </div>
+            <div ref="radarChartRef" class="radar-chart large-chart"></div>
+          </article>
+          <article class="visual-card evidence-card">
+            <div class="visual-title">
+              <span>脑电特征花瓣图</span>
+              <small>每根花瓣对应一个中间特征，花瓣越长说明该特征越明显</small>
+            </div>
+            <div class="flower-chart">
+              <svg class="flower-svg" viewBox="0 0 560 560" aria-hidden="true">
+                <circle class="flower-ring" cx="280" cy="280" r="82"></circle>
+                <circle class="flower-ring" cx="280" cy="280" r="160"></circle>
+                <circle class="flower-ring strong" cx="280" cy="280" r="240"></circle>
+                <text class="flower-axis-label fatigue" x="102" y="104">疲劳特征</text>
+                <text class="flower-axis-label stress" x="394" y="104">紧张特征</text>
+                <text class="flower-axis-label anxiety" x="392" y="468">焦虑特征</text>
+                <text class="flower-axis-label weakness" x="88" y="468">虚弱特征</text>
+                <g
+                  v-for="profile in stateFeatureProfiles"
+                  :key="profile.key"
+                  :class="['flower-group', profile.key, { active: profile.active }]"
+                  :style="{ '--state-color': profile.color }"
+                >
+                  <line
+                    v-for="petal in profile.petals"
+                    :key="`${profile.key}-${petal.label}`"
+                    class="flower-petal"
+                    :x1="petal.x1"
+                    :y1="petal.y1"
+                    :x2="petal.x2"
+                    :y2="petal.y2"
+                  ></line>
+                  <circle
+                    v-for="petal in profile.petals"
+                    :key="`${profile.key}-${petal.label}-dot`"
+                    class="flower-dot"
+                    :cx="petal.x2"
+                    :cy="petal.y2"
+                    r="5"
+                  ></circle>
+                </g>
+                <circle class="flower-center" cx="280" cy="280" r="56"></circle>
+                <text class="flower-center-title" x="280" y="274">10秒</text>
+                <text class="flower-center-subtitle" x="280" y="300">特征指纹</text>
+              </svg>
+              <div class="flower-legend">
+              <article
+                v-for="profile in stateFeatureProfiles"
+                :key="profile.key"
+                class="flower-legend-item"
+                :class="{ active: profile.active }"
+                :style="{ '--state-color': profile.color }"
+              >
+                <strong>{{ profile.name }}</strong>
+                <span>{{ profile.topFeatures }}</span>
+              </article>
+              </div>
+            </div>
+          </article>
+        </div>
+        <div v-else class="evidence-empty z-empty">当前样本没有 features.z 字段，特征解释页不做原始值回退，避免与个人基线口径混用。</div>
 
-      <article class="visual-card band-card">
-        <div class="visual-title">
-          <span>五波段占比趋势</span>
-          <small>可独立选择显示波段</small>
+        <div v-if="hasZFeatureData" class="explain-grid">
+          <article v-for="item in featureExplanations" :key="item.state" class="explain-card" :style="{ '--state-color': item.color }">
+            <strong>{{ item.state }}</strong>
+            <p>{{ item.text }}</p>
+          </article>
         </div>
-        <div class="band-switch">
-          <el-button
-            v-for="band in BAND_NAMES"
-            :key="band"
-            size="small"
-            :type="visibleBands.includes(band) ? 'primary' : 'default'"
-            @click="toggleBand(band)"
-          >
-            {{ BAND_LABELS[band] }}
-          </el-button>
-        </div>
-        <div class="chart-wrap trend-chart-wrap">
-          <div ref="bandChartRef" class="trend-chart"></div>
-          <div v-if="!eegTimeline.length" class="chart-empty">等待波段数据</div>
-        </div>
-        <div class="band-grid">
-          <div v-for="band in BAND_NAMES" :key="band" class="metric-box">
-            <span>{{ BAND_LABELS[band] }} 占比</span>
-            <strong>{{ formatBand(currentBandSnapshot[band]) }}</strong>
-          </div>
-        </div>
-      </article>
+      </div>
     </section>
 
     <div v-else-if="!uploading" class="empty-wrap">
@@ -953,11 +775,11 @@ onBeforeUnmount(() => {
 .kicker { font-size: 13px; color: #547089; }
 .top-bar h1 { margin: 8px 0 12px; }
 .top-bar p { margin: 0; color: #64748b; }
-.top-actions, .panel-head, .eeg-actions { display: flex; align-items: center; gap: 12px; }
+.top-actions, .panel-head { display: flex; align-items: center; gap: 12px; }
 .top-actions, .panel-head { justify-content: space-between; }
 .folder-input { display: none; }
 .base-panel { margin-top: 20px; padding: 20px 24px; }
-.config-grid, .quick-grid, .top-content-grid, .warning-grid, .band-grid, .visual-grid { display: grid; gap: 16px; }
+.config-grid, .quick-grid, .top-content-grid, .warning-grid, .visual-grid { display: grid; gap: 16px; }
 .config-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .config-grid :deep(.el-form-item) { margin-bottom: 0; }
 .quick-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 16px; }
@@ -979,7 +801,7 @@ onBeforeUnmount(() => {
   opacity: 1;
 }
 .empty-box { display: flex; align-items: center; justify-content: center; color: #dbeafe; }
-.warning-grid, .band-grid { margin-top: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.warning-grid { margin-top: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .final-state { margin-top: 16px; padding: 16px; border-radius: 10px; color: #fff; background: linear-gradient(135deg, #0f766e, #0891b2); }
 .final-state span, .final-state small { display: block; opacity: .84; }
 .final-state strong { display: block; margin: 5px 0; font-size: 32px; }
@@ -993,26 +815,49 @@ onBeforeUnmount(() => {
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .section-heading h2 { margin: 0; color: #203444; }
 .section-heading p { margin: 7px 0 0; color: #64748b; }
+.visual-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.page-switch :deep(.el-button) { min-width: 136px; height: 40px; font-size: 15px; font-weight: 700; }
+.visual-page { margin-top: 18px; }
+.page-note { padding: 14px 16px; border-radius: 10px; border: 1px solid #cfe9ed; background: linear-gradient(135deg, #eefafa, #f8fcff); color: #476275; font-size: 15px; line-height: 1.75; }
+.page-note strong { color: #0f766e; }
+.feature-note { margin-bottom: 16px; }
 .visual-grid { margin-top: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .visual-card { position: relative; border-radius: 12px; border: 1px solid #dce9ee; background: #fff; box-shadow: 0 8px 22px rgba(61,101,120,.07); }
 .visual-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 18px 0; color: #203444; font-weight: 800; }
-.visual-title small { color: #718696; font-weight: 500; }
-.gauge-chart, .radar-chart { height: 360px; }
-.feature-chart, .heatmap-chart { height: 330px; }
+.visual-title span { font-size: 18px; }
+.visual-title small { color: #718696; font-weight: 500; font-size: 13px; }
+.large-chart { height: 470px; }
+.evidence-card { grid-column: 1 / -1; padding-bottom: 18px; }
+.soft-legend { display: flex; align-items: center; gap: 10px; margin: -22px 18px 16px; color: #64748b; font-size: 13px; }
+.soft-legend em { margin-left: auto; font-style: normal; color: #7a8b99; }
+.legend-gradient { width: 180px; height: 12px; border-radius: 999px; background: linear-gradient(90deg, #f7fbff, #dbeafe, #93c5fd, #5eead4, #fbbf24, #f97316); border: 1px solid #d7e4ea; }
+.flower-chart { display: grid; grid-template-columns: minmax(420px, .92fr) 1fr; gap: 18px; align-items: center; margin: 18px; padding: 18px; border-radius: 18px; border: 1px solid #d7e8ee; background: radial-gradient(circle at 32% 50%, #ffffff 0%, #f6fbfd 58%, #eef7fa 100%); }
+.flower-svg { width: 100%; max-height: 620px; min-height: 520px; overflow: visible; }
+.flower-ring { fill: none; stroke: #dbe8ee; stroke-width: 1.2; }
+.flower-ring.strong { stroke: #c6dbe3; stroke-width: 1.6; stroke-dasharray: 6 7; }
+.flower-axis-label { fill: #64748b; font-size: 18px; font-weight: 900; letter-spacing: .5px; }
+.flower-group { color: var(--state-color); }
+.flower-petal { stroke: currentColor; stroke-width: 18; stroke-linecap: round; opacity: .46; filter: drop-shadow(0 8px 12px rgba(39,73,89,.16)); }
+.flower-dot { fill: #fff; stroke: currentColor; stroke-width: 3; opacity: .95; }
+.flower-group.active .flower-petal { stroke-width: 24; opacity: .82; filter: drop-shadow(0 12px 18px rgba(15,118,110,.2)); }
+.flower-group.active .flower-dot { r: 6; }
+.flower-center { fill: #0f766e; filter: drop-shadow(0 12px 22px rgba(15,118,110,.28)); }
+.flower-center-title, .flower-center-subtitle { fill: #fff; text-anchor: middle; font-weight: 900; }
+.flower-center-title { font-size: 22px; }
+.flower-center-subtitle { font-size: 17px; opacity: .9; }
+.flower-legend { display: grid; gap: 12px; }
+.flower-legend-item { border-left: 5px solid var(--state-color); border-radius: 12px; padding: 14px 16px; background: rgba(255,255,255,.86); box-shadow: 0 8px 18px rgba(61,101,120,.06); }
+.flower-legend-item.active { background: #eefafa; box-shadow: 0 12px 24px rgba(15,118,110,.14); }
+.flower-legend-item strong { display: block; color: var(--state-color); font-size: 20px; margin-bottom: 6px; }
+.flower-legend-item span { color: #64748b; font-size: 13px; line-height: 1.5; }
+.evidence-empty { display: flex; align-items: center; justify-content: center; min-height: 220px; color: #7b8a97; }
 .explain-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
 .explain-card { position: relative; padding: 16px; border-radius: 10px; border: 1px solid #e1ebef; background: #f9fcfd; }
 .explain-card::before { content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 4px; background: var(--state-color); }
 .explain-card strong { color: var(--state-color); font-size: 17px; }
 .explain-card p { margin: 8px 0 0; color: #607483; font-size: 13px; line-height: 1.65; }
-.band-card { margin-top: 16px; padding-bottom: 18px; }
-.band-switch { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 18px 10px; }
-.chart-wrap { position: relative; border-radius: 8px; background: #fbfeff; border: 1px solid #e4edf2; }
-.band-card .chart-wrap { margin: 0 18px; }
-.trend-chart-wrap { min-height: 240px; }
-.trend-chart { height: 240px; width: 100%; }
-.band-card .band-grid { margin: 16px 18px 0; grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #7b8a97; pointer-events: none; }
 .empty-wrap { min-height: 420px; display: flex; align-items: center; justify-content: center; }
 @media (max-width: 1440px) { .top-content-grid { grid-template-columns: 1fr 1fr; } .warning-panel { grid-column: 1 / -1; } .config-grid, .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .explain-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 960px) { .detail-page { padding: 16px; } .top-bar, .top-actions, .panel-head, .visual-title, .section-heading { flex-direction: column; align-items: flex-start; } .config-grid, .quick-grid, .top-content-grid, .warning-grid, .visual-grid, .explain-grid, .band-card .band-grid { grid-template-columns: 1fr; } .warning-panel { grid-column: auto; } }
+@media (max-width: 960px) { .detail-page { padding: 16px; } .top-bar, .top-actions, .panel-head, .visual-title, .section-heading, .visual-actions { flex-direction: column; align-items: flex-start; } .config-grid, .quick-grid, .top-content-grid, .warning-grid, .visual-grid, .explain-grid { grid-template-columns: 1fr; } .warning-panel, .evidence-card { grid-column: auto; } .large-chart { height: 420px; } .soft-legend { flex-wrap: wrap; margin-top: -8px; } .soft-legend em { margin-left: 0; } .flower-chart { grid-template-columns: 1fr; } .flower-svg { min-height: 420px; } }
 </style>
