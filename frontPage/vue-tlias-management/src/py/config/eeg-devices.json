@@ -3,7 +3,22 @@
     "workerId": 1,
     "value": 1,
     "name": "脑电设备 1",
+    "transport": "wifi",
     "baseUrl": "http://10.137.178.196",
+    "port": "",
+    "baud": 57600,
+    "label": "脑电设备 1 / http://10.137.178.196",
+    "enabled": true
+  },
+  {
+    "workerId": 2,
+    "value": 2,
+    "name": "脑电2",
+    "transport": "serial",
+    "baseUrl": "",
+    "port": "COM5",
+    "baud": 57600,
+    "label": "脑电2 / COM5 / 57600",
     "enabled": true
   }
 ]

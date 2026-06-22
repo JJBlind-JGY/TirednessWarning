@@ -1,8 +1,8 @@
-﻿import { computed, nextTick, onBeforeUnmount, onMounted, reactive } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive } from 'vue'
 import { ElMessage, ElNotification } from 'element-plus'
 import { createEegMonitor } from './useAlertEeg'
 import { createFaceMonitor } from './useAlertFace'
-import { normalizeCameraRecord } from './monitorDeviceConfig'
+import { normalizeCameraRecord, normalizeEegDeviceRecord } from './monitorDeviceConfig'
 import {
   normalizeFaceConfidence,
   selectStableEmotion,
@@ -129,12 +129,9 @@ function normalizePersonnel(item, index = 0) {
 }
 
 function normalizeDevice(item, index = 0) {
-  const value = Number(item.value ?? item.workerId ?? index + 1)
-  const name = String(item.name || `脑电设备${value}`)
-  const inputUrl = String(item.baseUrl || '').trim().replace(/\/+$/, '')
-  const baseUrl = inputUrl && !inputUrl.includes('://') ? `http://${inputUrl}` : inputUrl
-  return { value, name, baseUrl, label: baseUrl ? `${name} / ${baseUrl}` : name }
+  return normalizeEegDeviceRecord(item, index)
 }
+
 
 function normalizeCamera(item, index = 0) {
   return normalizeCameraRecord(item, index, GO2RTC_BASE_URL)
@@ -177,7 +174,7 @@ async function loadCameras() {
 }
 
 function persistPersonnel() { writeLocalList(PERSONNEL_STORAGE_KEY, state.personnelOptions.map(({ id, uid, name, type }) => ({ id, uid, name, type }))) }
-function persistDevices() { writeLocalList(DEVICE_STORAGE_KEY, DEVICE_OPTIONS.map(({ value, name, baseUrl }) => ({ value, name, baseUrl }))) }
+function persistDevices() { writeLocalList(DEVICE_STORAGE_KEY, DEVICE_OPTIONS.map(({ value, name, transport, baseUrl, port, baud }) => ({ value, name, transport, baseUrl, port, baud }))) }
 function persistCameras() { writeLocalList(CAMERA_STORAGE_KEY, CAMERA_OPTIONS.map(({ id, name, sourceType, deviceIndex, rtspUrl, streamName }) => ({ id, name, sourceType, deviceIndex, rtspUrl, streamName }))) }
 function loadBindings() { state.bindings = readLocalList(BINDINGS_STORAGE_KEY, []).map(normalizeBinding) }
 function persistBindings() { writeLocalList(BINDINGS_STORAGE_KEY, state.bindings.map(({ id, personId, personName, personType, workerId, faceChannelId }) => ({ id, personId, personName, personType, workerId, faceChannelId }))) }
@@ -1104,9 +1101,9 @@ async function updatePersonnel(record) { const index = state.personnelOptions.fi
 async function removePersonnel(personId) { const index = state.personnelOptions.findIndex((item) => item.id === personId); if (index === -1) return; await removeRemotePersonnel(personId); state.personnelOptions.splice(index, 1); persistPersonnel(); syncBindingsWithPersonnel() }
 
 function getNextDeviceValue() { return DEVICE_OPTIONS.reduce((max, item) => Math.max(max, Number(item.value || 0)), 0) + 1 }
-async function syncRemoteDevice(device) { if (!device.baseUrl) return; const response = await fetch('/eeg/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workerId: device.value, value: device.value, name: device.name, baseUrl: device.baseUrl }) }); if (!response.ok) throw new Error(`eeg device save failed: ${response.status}`) }
+async function syncRemoteDevice(device) { const response = await fetch('/eeg/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workerId: device.value, value: device.value, name: device.name, transport: device.transport, baseUrl: device.baseUrl, port: device.port, baud: device.baud }) }); if (!response.ok) throw new Error(`eeg device save failed: ${response.status}`) }
 async function removeRemoteDevice(deviceValue) { const response = await fetch(`/eeg/devices/${encodeURIComponent(deviceValue)}`, { method: 'DELETE' }); if (!response.ok && response.status !== 404) throw new Error(`eeg device delete failed: ${response.status}`) }
-async function addDevice(record) { const normalized = normalizeDevice({ value: getNextDeviceValue(), name: record.name, baseUrl: record.baseUrl }, DEVICE_OPTIONS.length); await syncRemoteDevice(normalized); DEVICE_OPTIONS.push(normalized); persistDevices(); state.bindings.forEach((binding) => { if (binding.workerId == null) binding.workerId = normalized.value }) }
+async function addDevice(record) { const normalized = normalizeDevice({ value: getNextDeviceValue(), name: record.name, transport: record.transport, baseUrl: record.baseUrl, port: record.port, baud: record.baud }, DEVICE_OPTIONS.length); await syncRemoteDevice(normalized); DEVICE_OPTIONS.push(normalized); persistDevices(); state.bindings.forEach((binding) => { if (binding.workerId == null) binding.workerId = normalized.value }) }
 async function updateDevice(record) { const index = DEVICE_OPTIONS.findIndex((item) => item.value === Number(record.value)); if (index === -1) return; const normalized = normalizeDevice(record, index); await syncRemoteDevice(normalized); DEVICE_OPTIONS[index] = normalized; persistDevices(); state.bindings.forEach((binding) => { if (binding.workerId === normalized.value) { eegMonitor.stopEeg(binding.id, 'restart'); eegMonitor.ensureAutoEeg(binding) } }); persistBindings() }
 async function removeDevice(deviceValue) { const index = DEVICE_OPTIONS.findIndex((item) => item.value === Number(deviceValue)); if (index === -1) return; await removeRemoteDevice(deviceValue); DEVICE_OPTIONS.splice(index, 1); persistDevices(); syncBindingsWithDevices() }
 

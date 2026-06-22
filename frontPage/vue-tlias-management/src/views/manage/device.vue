@@ -22,7 +22,10 @@ void initMonitorCenter()
 const eegForm = reactive({
   value: null,
   name: '',
-  baseUrl: ''
+  transport: 'wifi',
+  baseUrl: '',
+  port: '',
+  baud: 57600
 })
 const eegHealth = reactive({})
 let healthTimer = null
@@ -40,7 +43,10 @@ const cameraForm = reactive({
 function resetEegForm() {
   eegForm.value = null
   eegForm.name = ''
+  eegForm.transport = 'wifi'
   eegForm.baseUrl = ''
+  eegForm.port = ''
+  eegForm.baud = 57600
 }
 
 function resetCameraForm() {
@@ -58,11 +64,23 @@ async function submitEegForm() {
     ElMessage.warning('请先填写脑电设备名称')
     return
   }
-  eegForm.baseUrl = normalizeDeviceUrl(eegForm.baseUrl)
-  if (!isValidDeviceUrl(eegForm.baseUrl)) {
-    ElMessage.warning('请填写有效的 HTTP 设备地址，例如 http://192.168.1.50')
-    return
+  if (eegForm.transport === 'wifi') {
+    eegForm.baseUrl = normalizeDeviceUrl(eegForm.baseUrl)
+    eegForm.port = ''
+    if (!isValidDeviceUrl(eegForm.baseUrl)) {
+      ElMessage.warning('请填写有效的 HTTP 设备地址，例如 http://192.168.1.50')
+      return
+    }
+  } else {
+    eegForm.baseUrl = ''
+    eegForm.port = String(eegForm.port || '').trim()
+    eegForm.baud = Number.parseInt(eegForm.baud || 57600, 10) || 57600
+    if (!eegForm.port) {
+      ElMessage.warning('请填写串口号，例如 COM5')
+      return
+    }
   }
+
 
   try {
     if (eegForm.value != null) {
@@ -138,7 +156,10 @@ function hasLocalCameraIndexConflict() {
 function editEegRow(row) {
   eegForm.value = row.value
   eegForm.name = row.name
-  eegForm.baseUrl = row.baseUrl
+  eegForm.transport = row.transport || (row.port ? 'serial' : 'wifi')
+  eegForm.baseUrl = row.baseUrl || ''
+  eegForm.port = row.port || ''
+  eegForm.baud = row.baud || 57600
 }
 
 function isValidDeviceUrl(value) {
@@ -153,6 +174,10 @@ function isValidDeviceUrl(value) {
 function normalizeDeviceUrl(value) {
   const input = String(value || '').trim().replace(/\/+$/, '')
   return input && !input.includes('://') ? `http://${input}` : input
+}
+
+function getEegConnectionText(row) {
+  return row.transport === 'serial' ? `${row.port || '--'} / ${row.baud || 57600}` : (row.baseUrl || '--')
 }
 
 function formatLastSuccess(value) {
@@ -263,9 +288,23 @@ async function removeCameraRow(row) {
           <el-form-item label="脑电设备名称">
             <el-input v-model="eegForm.name" placeholder="例如：脑电 1" />
           </el-form-item>
-          <el-form-item label="设备 IP / 地址">
+          <el-form-item label="设备类型">
+            <el-radio-group v-model="eegForm.transport">
+              <el-radio-button label="wifi">WiFi 设备</el-radio-button>
+              <el-radio-button label="serial">串口设备</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="eegForm.transport === 'wifi'" label="设备 IP / 地址">
             <el-input v-model="eegForm.baseUrl" placeholder="例如：http://192.168.1.50" />
           </el-form-item>
+          <template v-else>
+            <el-form-item label="脑电串口">
+              <el-input v-model="eegForm.port" placeholder="例如：COM5" />
+            </el-form-item>
+            <el-form-item label="串口波特率">
+              <el-input-number v-model="eegForm.baud" :min="1200" :step="1200" />
+            </el-form-item>
+          </template>
         </div>
         <div class="form-actions">
           <el-button type="primary" @click="submitEegForm">{{ eegForm.value != null ? '保存脑电设备' : '添加脑电设备' }}</el-button>

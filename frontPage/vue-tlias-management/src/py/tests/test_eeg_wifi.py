@@ -51,6 +51,39 @@ def payload(start, samples, *, next_index=None, boot_id="boot-1", summary_index=
     }
 
 
+def tgam_packet(payload_bytes):
+    checksum = (~sum(payload_bytes)) & 0xFF
+    return bytes([0xAA, 0xAA, len(payload_bytes), *payload_bytes, checksum])
+
+
+def raw_payload(value):
+    if value < 0:
+        value = (1 << 16) + value
+    return [0x80, 0x02, (value >> 8) & 0xFF, value & 0xFF]
+
+
+def power_payload(values):
+    payload_bytes = [0x83, 0x18]
+    for value in values:
+        payload_bytes.extend([(value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF])
+    return payload_bytes
+
+
+class FakeSerial:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+        self.is_open = True
+
+    def read(self, _size):
+        if self.chunks:
+            return self.chunks.pop(0)
+        time.sleep(0.01)
+        return b""
+
+    def close(self):
+        self.is_open = False
+
+
 class FakeDeviceHandler(BaseHTTPRequestHandler):
     response_payload = payload(0, [1, 2, 3])
 
@@ -110,6 +143,23 @@ class WifiEegWorkerTests(unittest.TestCase):
     def test_invalid_device_url_is_rejected(self):
         with self.assertRaises(ValueError):
             EEG.normalize_device({"workerId": 1, "name": "bad", "baseUrl": "COM5"})
+
+    def test_serial_device_config_is_normalized(self):
+        device = EEG.normalize_device({"workerId": 2, "name": "serial", "transport": "serial", "port": "COM5"})
+        self.assertEqual(device["transport"], "serial")
+        self.assertEqual(device["port"], "COM5")
+        self.assertEqual(device["baud"], 57600)
+        self.assertEqual(device["baseUrl"], "")
+
+    def test_legacy_serial_config_is_normalized(self):
+        device = EEG.normalize_device({"workerId": 2, "name": "serial", "port": "COM5"})
+        self.assertEqual(device["transport"], "serial")
+        self.assertEqual(device["label"], "serial / COM5 / 57600")
+
+    def test_legacy_wifi_config_is_normalized(self):
+        device = EEG.normalize_device({"workerId": 1, "name": "wifi", "baseUrl": "10.137.178.196"})
+        self.assertEqual(device["transport"], "wifi")
+        self.assertEqual(device["baseUrl"], "http://10.137.178.196")
 
     def test_bare_ip_is_normalized_to_http(self):
         device = EEG.normalize_device({
@@ -235,10 +285,34 @@ class WifiEegWorkerTests(unittest.TestCase):
         self.assertEqual(accepted, [4, 5])
         self.assertEqual(list(worker.raw_buffer), [4, 5])
 
+    def test_serial_worker_parses_tgam_stream(self):
+        samples = tgam_packet(raw_payload(101)) + tgam_packet([0x02, 0, 0x04, 55, 0x05, 45]) + tgam_packet(power_payload([100, 200, 300, 400, 500, 600, 700, 800]))
+        worker = EEG.SerialEEGWorker(4, "COM_TEST")
+        worker.ser = FakeSerial([samples])
+        published = []
+        worker._publish = published.append
+        worker._open_serial = lambda: worker._set_status("online")
+        worker.stop_event.wait = lambda _timeout=None: False
+
+        original_sleep = time.sleep
+        try:
+            time.sleep = lambda _seconds: worker.stop_event.set()
+            worker.run()
+        finally:
+            time.sleep = original_sleep
+
+        analysis = [item for item in published if item.get("raw_powers")]
+        self.assertTrue(analysis)
+        self.assertEqual(analysis[-1]["transport"], "serial")
+        self.assertEqual(analysis[-1]["port"], "COM_TEST")
+        self.assertEqual(analysis[-1]["raw_powers"]["low_alpha"], 300)
+        self.assertEqual(worker.total_raw_count, 1)
+        self.assertEqual(worker.total_eeg_power_count, 1)
+
     def test_synchronize_workers_starts_all_enabled_devices(self):
         devices = [
             {"workerId": 1, "value": 1, "name": "one", "baseUrl": "http://127.0.0.1:1", "enabled": True},
-            {"workerId": 2, "value": 2, "name": "two", "baseUrl": "http://127.0.0.1:2", "enabled": True},
+            {"workerId": 2, "value": 2, "name": "two", "transport": "serial", "port": "COM2", "baud": 57600, "enabled": True},
             {"workerId": 3, "value": 3, "name": "disabled", "baseUrl": "http://127.0.0.1:3", "enabled": False},
         ]
         original_workers = EEG.workers
@@ -249,7 +323,8 @@ class WifiEegWorkerTests(unittest.TestCase):
             time.sleep(0.05)
             self.assertEqual(set(mapping), {1, 2})
             self.assertEqual(set(EEG.workers), {1, 2})
-            self.assertTrue(all(worker.is_alive() for worker in EEG.workers.values()))
+            self.assertEqual(EEG.workers[1].transport, "wifi")
+            self.assertEqual(EEG.workers[2].transport, "serial")
         finally:
             for worker in EEG.workers.values():
                 worker.stop()

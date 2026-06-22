@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useEegStore } from '@/stores/eeg'
@@ -142,7 +142,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="header-right">
         <el-select v-model="selectedWorkerId" placeholder="选择设备" size="small" class="port-select">
-          <el-option v-for="device in deviceList" :key="device.workerId" :label="`${device.name} / ${device.baseUrl}`" :value="device.workerId" />
+          <el-option v-for="device in deviceList" :key="device.workerId" :label="device.label || `${device.name} / ${device.baseUrl || device.port || device.workerId}`" :value="device.workerId" />
         </el-select>
         <el-button type="primary" size="small" :disabled="collecting" @click="startCollect">开始接入</el-button>
         <el-button type="danger" size="small" :disabled="!collecting" @click="stopCollect">停止</el-button>

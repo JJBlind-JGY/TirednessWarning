@@ -1,4 +1,4 @@
-﻿import * as echarts from 'echarts'
+import * as echarts from 'echarts'
 
 import { isInvalidEegContact } from './eegContact'
 
@@ -301,6 +301,22 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     evaluateWarning(binding)
   }
 
+  function getWaitingEegText(status, payload = {}) {
+    const rawCount = Number(payload.raw_count || 0)
+    const eegPowerCount = Number(payload.eeg_power_count || 0)
+    if (status === 'connecting') return '脑电连接中'
+    if (rawCount > 0 && eegPowerCount <= 0) return '设备在线，已收到原始波形，等待有效佩戴/频段数据'
+    return '在线，等待脑电数据'
+  }
+
+  function getInvalidContactText(eegStatus, payload = {}) {
+    const rawCount = Number(payload.raw_count || 0)
+    if (eegStatus === 'no_contact') {
+      return rawCount > 0 ? '设备在线，已收到原始波形，等待有效佩戴' : '设备在线，等待佩戴'
+    }
+    return rawCount > 0 ? '设备在线，信号质量不佳' : '信号质量不佳'
+  }
+
   function updateEegData(binding, payload) {
     const status = payload.status || 'ok'
     const statusText = payload.message || payload.error || ''
@@ -323,9 +339,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
         : 'poor_signal'
       binding.eegQualityLevel = payload.quality_level || ''
       binding.signalQuality = payload.signal_quality ?? null
-      binding.eegStatusText = binding.eegStatus === 'no_contact'
-        ? '设备在线，等待佩戴'
-        : '信号质量不佳'
+      binding.eegStatusText = getInvalidContactText(binding.eegStatus, payload)
       binding.analysisTime = payload.analysis_time || binding.analysisTime
       binding.rawWaveBuffer = []
       binding.bandSnapshot = { ...DEFAULT_BAND_SNAPSHOT }
@@ -363,7 +377,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
       binding.eegStatus = status
       binding.baselineResetReason = payload.baseline_reset_reason || ''
       binding.baselineResetAt = payload.baseline_reset_at || ''
-      binding.eegStatusText = status === 'connecting' ? '脑电连接中' : '在线，等待脑电数据'
+      binding.eegStatusText = getWaitingEegText(status, payload)
       updateFusionState?.(binding)
       evaluateWarning(binding)
       return

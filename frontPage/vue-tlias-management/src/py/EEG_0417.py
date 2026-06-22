@@ -30,6 +30,11 @@ from flask import Flask, Response, request
 from scipy.signal import butter, iirnotch, lfilter, lfilter_zi, sosfilt, sosfilt_zi, tf2sos
 from scipy.special import softmax
 
+try:
+    import serial
+except Exception:
+    serial = None
+
 
 app = Flask(__name__)
 
@@ -53,6 +58,8 @@ HTTP_TIMEOUT_SEC = float(os.environ.get("EEG_HTTP_TIMEOUT_SEC", "2.0"))
 HTTP_IDLE_POLL_SEC = float(os.environ.get("EEG_HTTP_IDLE_POLL_SEC", "0.1"))
 HTTP_RETRY_MAX_SEC = float(os.environ.get("EEG_HTTP_RETRY_MAX_SEC", "5.0"))
 HTTP_FETCH_LIMIT = max(32, min(int(os.environ.get("EEG_HTTP_FETCH_LIMIT", "512")), 512))
+BAUDRATE = int(os.environ.get("EEG_SERIAL_BAUD", "57600"))
+SERIAL_SILENCE_OFFLINE_SEC = float(os.environ.get("EEG_SERIAL_SILENCE_OFFLINE_SEC", "3.0"))
 
 RAW_FS = 512
 TARGET_FS = 128
@@ -771,11 +778,14 @@ class EEGAnalyzer:
         }
 
 
-class EEGWorker(threading.Thread):
+class WifiEEGWorker(threading.Thread):
     def __init__(self, worker_id, base_url, baseline_reset_reason="worker_created"):
         super().__init__(daemon=True)
         self.worker_id = worker_id
+        self.transport = "wifi"
         self.base_url = base_url.rstrip("/")
+        self.port_str = ""
+        self.baud = BAUDRATE
         self.stop_event = threading.Event()
         self.analyzer = EEGAnalyzer(baseline_sec=BASELINE_SEC, baseline_reset_reason=baseline_reset_reason)
         self.raw_buffer = deque(maxlen=WINDOW_SIZE)
@@ -825,9 +835,15 @@ class EEGWorker(threading.Thread):
             current_status = status or self.status
             current_error = self.last_error if error is None else str(error or "")
             last_payload_at = self.last_payload_at
+        quality_level = self.analyzer._quality_level(self.last_signal_quality)
+        if status is None and self.contact_blocked:
+            current_status = "no_contact" if quality_level == "no_contact" else "poor_signal"
         return {
             "workerId": self.worker_id,
+            "transport": self.transport,
             "baseUrl": self.base_url,
+            "port": self.port_str,
+            "baud": self.baud,
             "status": current_status,
             "valid_current": False,
             "raw_wave": [],
@@ -837,6 +853,8 @@ class EEGWorker(threading.Thread):
             "features": {},
             "reason_codes": [current_error] if current_error else [],
             "message": current_error,
+            "signal_quality": self.last_signal_quality,
+            "quality_level": quality_level,
             "last_payload_at": last_payload_at,
             "subscriber_count": self._subscriber_count(),
             "raw_count": self.total_raw_count,
@@ -856,6 +874,9 @@ class EEGWorker(threading.Thread):
             "baseline_reset_at": self.analyzer.baseline_reset_at,
             "baseline_ready": self.analyzer.is_baseline_ready(),
         }
+
+    def connection_key(self):
+        return f"wifi:{self.base_url}"
 
     def _fetch_payload(self):
         query = urlencode({
@@ -1255,6 +1276,137 @@ class EEGWorker(threading.Thread):
         )
 
 
+class SerialEEGWorker(WifiEEGWorker):
+    def __init__(self, worker_id, port, baud=BAUDRATE, baseline_reset_reason="worker_created"):
+        super().__init__(worker_id, "http://serial.local", baseline_reset_reason=baseline_reset_reason)
+        self.transport = "serial"
+        self.base_url = ""
+        self.port_str = str(port or "").strip()
+        self.baud = int(baud or BAUDRATE)
+        self.parser = TGAMParser()
+        self.ser = None
+        self.last_serial_read_at = time.monotonic()
+
+    def connection_key(self):
+        return f"serial:{self.port_str}:{self.baud}"
+
+    def _open_serial(self):
+        if serial is None:
+            raise RuntimeError("pyserial is required for serial EEG devices")
+        if self.ser is None or not self.ser.is_open:
+            self._set_status("connecting")
+            self.ser = serial.Serial(self.port_str, self.baud, timeout=0.1)
+            self.last_serial_read_at = time.monotonic()
+            self._set_status("online")
+            logger.info("serial opened | worker=%s port=%s baud=%s", self.worker_id, self.port_str, self.baud)
+
+    def _build_serial_analysis_payload(self, eeg_power):
+        self.total_eeg_power_count += 1
+        self._debug_log_eeg_power(eeg_power)
+        result = self.analyzer.analyze(
+            eeg_power,
+            self.last_signal_quality,
+            attention=self.last_attention,
+            meditation=self.last_meditation,
+        )
+        original_wave = [int(value) for value in self.raw_since_last[-RAW_FS:]]
+        display_wave = self._filter_display_samples(original_wave, update_state=False)[::DOWNSAMPLE_FACTOR]
+        result.update({
+            "workerId": self.worker_id,
+            "transport": self.transport,
+            "port": self.port_str,
+            "baud": self.baud,
+            "raw_powers": eeg_power,
+            "raw_wave": self._get_raw_wave_chunk(),
+            "wave_fs": TARGET_FS,
+            "raw_wave_original": original_wave,
+            "raw_wave_original_fs": RAW_FS,
+            "raw_wave_original_live_published": True,
+            "raw_wave_display": [float(round(value, 3)) for value in display_wave],
+            "display_wave_fs": TARGET_FS,
+            "analysis_time": datetime.utcnow().isoformat() + "Z",
+            "analysis_ts": int(time.time() * 1000),
+        })
+        return result
+
+    def run(self):
+        try:
+            self._publish(self.status_payload(status="connecting"))
+            self._open_serial()
+            while not self.stop_event.is_set():
+                chunk = self.ser.read(256)
+                if not chunk:
+                    if time.monotonic() - self.last_serial_read_at > SERIAL_SILENCE_OFFLINE_SEC:
+                        raise TimeoutError(f"serial silent for {SERIAL_SILENCE_OFFLINE_SEC:.1f}s")
+                    continue
+
+                self.last_serial_read_at = time.monotonic()
+                self.last_success_at = datetime.utcnow().isoformat() + "Z"
+                self._debug_log_chunk(len(chunk))
+                events = self.parser.feed(chunk)
+                eeg_power_event = None
+
+                for event in events:
+                    event_type = event["type"]
+                    if event_type == "raw":
+                        raw_value = int(event["value"])
+                        self.total_raw_count += 1
+                        self.raw_buffer.append(raw_value)
+                        self.raw_since_last.append(raw_value)
+                        self._remember_raw_tgam(raw_value)
+                        self.last_sample_at = datetime.utcnow().isoformat() + "Z"
+                    elif event_type == "signal":
+                        self.last_signal_quality = int(event["value"])
+                    elif event_type == "attention":
+                        self.last_attention = event["value"]
+                    elif event_type == "meditation":
+                        self.last_meditation = event["value"]
+                    elif event_type == "eeg_power":
+                        eeg_power_event = event["value"]
+
+                if self.raw_since_last:
+                    display_samples = self._filter_display_samples(self.raw_since_last[-RAW_FS:])[::DOWNSAMPLE_FACTOR]
+                    self._publish({
+                        "workerId": self.worker_id,
+                        "transport": self.transport,
+                        "port": self.port_str,
+                        "baud": self.baud,
+                        "status": "online",
+                        "payload_type": "raw_wave",
+                        "signal_quality": self.last_signal_quality,
+                        "quality_level": self.analyzer._quality_level(self.last_signal_quality),
+                        "raw_wave_original": [int(value) for value in self.raw_since_last[-RAW_FS:]],
+                        "raw_wave_original_fs": RAW_FS,
+                        "raw_wave_display": [float(round(value, 3)) for value in display_samples],
+                        "display_wave_fs": TARGET_FS,
+                    })
+
+                if eeg_power_event is not None:
+                    result = self._build_serial_analysis_payload(eeg_power_event)
+                    self.last_payload_at = result["analysis_time"]
+                    self._set_status("online")
+                    self.total_sse_payload_count += 1
+                    self._remember_snapshot(result)
+                    self._debug_log_payload(result)
+                    self._publish(result)
+        except Exception as exc:
+            self.error_count += 1
+            self._set_status("error", exc)
+            self._publish(self.status_payload(status="error", error=exc))
+            logger.exception("serial eeg worker error | worker=%s port=%s error=%s", self.worker_id, self.port_str, exc)
+        finally:
+            try:
+                if self.ser and self.ser.is_open:
+                    self.ser.close()
+                    logger.info("serial closed | worker=%s port=%s", self.worker_id, self.port_str)
+            except Exception:
+                pass
+            self._set_status("offline")
+
+
+EEGWorker = WifiEEGWorker
+
+
 workers = OrderedDict()
 workers_lock = threading.Lock()
 config_lock = threading.Lock()
@@ -1262,23 +1414,46 @@ config_lock = threading.Lock()
 
 def normalize_device(item, index=0):
     worker_id = int(item.get("workerId") or item.get("value") or index + 1)
-    base_url = str(item.get("baseUrl") or "").strip().rstrip("/")
-    if base_url and "://" not in base_url:
-        base_url = f"http://{base_url}"
-    parsed = urlparse(base_url)
-    hostname = parsed.hostname or ""
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.netloc
-        or (hostname != "localhost" and "." not in hostname and ":" not in hostname)
-    ):
-        raise ValueError("baseUrl must be a valid HTTP URL")
     name = str(item.get("name") or f"EEG {worker_id}").strip()
+    raw_transport = str(item.get("transport") or "").strip().lower()
+    has_base_url = bool(str(item.get("baseUrl") or "").strip())
+    has_port = bool(str(item.get("port") or "").strip())
+    transport = raw_transport or ("serial" if has_port and not has_base_url else "wifi")
+    if transport not in {"wifi", "serial"}:
+        raise ValueError("transport must be wifi or serial")
+
+    base_url = str(item.get("baseUrl") or "").strip().rstrip("/")
+    port = str(item.get("port") or "").strip()
+    baud = int(item.get("baud") or BAUDRATE)
+
+    if transport == "wifi":
+        if base_url and "://" not in base_url:
+            base_url = f"http://{base_url}"
+        parsed = urlparse(base_url)
+        hostname = parsed.hostname or ""
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or (hostname != "localhost" and "." not in hostname and ":" not in hostname)
+        ):
+            raise ValueError("baseUrl must be a valid HTTP URL")
+        port = ""
+        label = f"{name} / {base_url}"
+    else:
+        if not port:
+            raise ValueError("port is required")
+        base_url = ""
+        label = f"{name} / {port} / {baud}"
+
     return {
         "workerId": worker_id,
         "value": worker_id,
         "name": name,
+        "transport": transport,
         "baseUrl": base_url,
+        "port": port,
+        "baud": baud,
+        "label": label,
         "enabled": bool(item.get("enabled", True)),
     }
 
@@ -1311,16 +1486,23 @@ def save_device_config(devices):
 
 def get_device_mapping():
     return {
-        device["workerId"]: device["baseUrl"]
+        device["workerId"]: device
         for device in load_device_config()
         if device.get("enabled", True)
     }
 
 
+def device_connection_key(device):
+    if device.get("transport") == "serial":
+        return f"serial:{device.get('port')}:{int(device.get('baud') or BAUDRATE)}"
+    return f"wifi:{device.get('baseUrl')}"
+
+
 def stop_removed_or_changed_workers(next_mapping):
     with workers_lock:
         for worker_id, worker in list(workers.items()):
-            if next_mapping.get(worker_id) != worker.base_url:
+            next_device = next_mapping.get(worker_id)
+            if next_device is None or device_connection_key(next_device) != worker.connection_key():
                 worker.stop()
                 workers.pop(worker_id, None)
 
@@ -1328,17 +1510,18 @@ def stop_removed_or_changed_workers(next_mapping):
 def synchronize_workers():
     device_mapping = get_device_mapping()
     stop_removed_or_changed_workers(device_mapping)
-    for worker_id, base_url in device_mapping.items():
+    for worker_id, device in device_mapping.items():
         try:
             worker = get_or_create_worker(worker_id)
             logger.info(
-                "wifi eeg worker active | worker=%s url=%s alive=%s",
+                "eeg worker active | worker=%s transport=%s endpoint=%s alive=%s",
                 worker_id,
-                base_url,
+                device.get("transport"),
+                device.get("baseUrl") or device.get("port"),
                 worker.is_alive(),
             )
         except Exception:
-            logger.exception("failed to start wifi eeg worker | worker=%s url=%s", worker_id, base_url)
+            logger.exception("failed to start eeg worker | worker=%s device=%s", worker_id, device)
     return device_mapping
 
 
@@ -1350,7 +1533,7 @@ def fetch_device_json(url):
         return json.loads(response.read().decode("utf-8"))
 
 
-def probe_device_protocol(device):
+def probe_wifi_device_protocol(device):
     base_url = device["baseUrl"]
     status_payload = fetch_device_json(f"{base_url}/api/status")
     eeg_payload = fetch_device_json(
@@ -1365,6 +1548,21 @@ def probe_device_protocol(device):
     return status_payload, eeg_payload
 
 
+def probe_serial_device_protocol(device):
+    if serial is None:
+        raise RuntimeError("pyserial is required for serial EEG devices")
+    ser = serial.Serial(device["port"], int(device.get("baud") or BAUDRATE), timeout=0.2)
+    try:
+        return {"port": device["port"], "baud": int(device.get("baud") or BAUDRATE), "isOpen": ser.is_open}
+    finally:
+        ser.close()
+
+
+def probe_device_protocol(device):
+    if device.get("transport") == "serial":
+        return probe_serial_device_protocol(device)
+    return probe_wifi_device_protocol(device)
+
 def remove_worker_if_current(worker_id, worker):
     with workers_lock:
         if workers.get(worker_id) is worker:
@@ -1375,8 +1573,8 @@ def get_or_create_worker(worker_id):
     device_mapping = get_device_mapping()
     if not device_mapping:
         raise ValueError("no eeg devices configured")
-    base_url = device_mapping.get(worker_id)
-    if not base_url:
+    device = device_mapping.get(worker_id)
+    if not device:
         raise ValueError(f"worker {worker_id} is not configured")
 
     with workers_lock:
@@ -1394,7 +1592,15 @@ def get_or_create_worker(worker_id):
             _, old_worker = workers.popitem(last=False)
             old_worker.stop()
 
-        worker = EEGWorker(worker_id, base_url, baseline_reset_reason=baseline_reset_reason)
+        if device.get("transport") == "serial":
+            worker = SerialEEGWorker(
+                worker_id,
+                device["port"],
+                int(device.get("baud") or BAUDRATE),
+                baseline_reset_reason=baseline_reset_reason,
+            )
+        else:
+            worker = WifiEEGWorker(worker_id, device["baseUrl"], baseline_reset_reason=baseline_reset_reason)
         workers[worker_id] = worker
         worker.start()
         return worker
@@ -1404,7 +1610,7 @@ def get_or_create_worker(worker_id):
 def index():
     return {
         "service": "eeg-stream",
-        "transport": "wifi-http",
+        "transport": "wifi-http+serial-tgam",
         "status": "ok",
         "default_worker_id": DEFAULT_WORKER_ID,
         "stream_url": "/eeg/stream",
@@ -1416,10 +1622,13 @@ def health():
     device_mapping = get_device_mapping()
     with workers_lock:
         worker_status = {worker_id: worker.status_payload() for worker_id, worker in workers.items()}
-    for worker_id, base_url in device_mapping.items():
+    for worker_id, device in device_mapping.items():
         worker_status.setdefault(worker_id, {
             "workerId": worker_id,
-            "baseUrl": base_url,
+            "transport": device.get("transport"),
+            "baseUrl": device.get("baseUrl", ""),
+            "port": device.get("port", ""),
+            "baud": int(device.get("baud") or BAUDRATE),
             "status": "connecting",
             "message": "worker is starting",
             "subscriber_count": 0,
@@ -1469,24 +1678,39 @@ def probe_eeg_device(worker_id):
     if device is None:
         return {"status": "error", "message": "device not found"}, 404
     try:
-        status_payload, eeg_payload = probe_device_protocol(device)
+        probe_payload = probe_device_protocol(device)
         worker = get_or_create_worker(worker_id) if device.get("enabled", True) else None
-        return {
-            "status": "ok",
-            "data": {
-                "hardwareReachable": True,
-                "protocolValid": True,
-                "collectorStatus": worker.status_payload() if worker else None,
+        data = {
+            "transport": device.get("transport"),
+            "hardwareReachable": True,
+            "protocolValid": True,
+            "collectorStatus": worker.status_payload() if worker else None,
+        }
+        if device.get("transport") == "serial":
+            data.update({
+                "port": probe_payload.get("port"),
+                "baud": probe_payload.get("baud"),
+                "isOpen": probe_payload.get("isOpen"),
+            })
+        else:
+            status_payload, eeg_payload = probe_payload
+            data.update({
                 "deviceId": eeg_payload.get("deviceId") or status_payload.get("deviceId"),
                 "bootId": eeg_payload.get("bootId"),
                 "sampleRateHz": eeg_payload.get("sampleRateHz"),
                 "nextSampleIndex": eeg_payload.get("nextSampleIndex"),
                 "rssi": eeg_payload.get("rssi", status_payload.get("rssi")),
                 "status": status_payload,
-            },
-        }
+            })
+        return {"status": "ok", "data": data}
     except Exception as exc:
-        logger.warning("wifi eeg probe failed | worker=%s url=%s error=%s", worker_id, device["baseUrl"], exc)
+        logger.warning(
+            "eeg probe failed | worker=%s transport=%s endpoint=%s error=%s",
+            worker_id,
+            device.get("transport"),
+            device.get("baseUrl") or device.get("port"),
+            exc,
+        )
         return {"status": "error", "message": str(exc)}, 502
 
 
@@ -1538,7 +1762,7 @@ def sse_stream():
     sent_count = 0
     ip = request.remote_addr  # ✅ 提前保存
 
-    logger.info("sse connected | ip=%s worker=%s url=%s stream=%s", request.remote_addr, worker_id, worker.base_url, stream_id)
+    logger.info("sse connected | ip=%s worker=%s transport=%s endpoint=%s stream=%s", request.remote_addr, worker_id, worker.transport, worker.base_url or worker.port_str, stream_id)
 
     def event_stream():
         nonlocal sent_count
@@ -1583,12 +1807,12 @@ def sse_stream():
 
 
 if __name__ == "__main__":
-    logger.info("EEG WiFi server start | config=%s", CONFIG_FILE)
+    logger.info("EEG server start | config=%s", CONFIG_FILE)
     configured_devices = load_device_config()
     logger.info(
-        "EEG WiFi devices loaded | count=%s devices=%s",
+        "EEG devices loaded | count=%s devices=%s",
         len(configured_devices),
-        [(device["workerId"], device["baseUrl"], device["enabled"]) for device in configured_devices],
+        [(device["workerId"], device.get("transport"), device.get("baseUrl") or device.get("port"), device["enabled"]) for device in configured_devices],
     )
     synchronize_workers()
     app.run(host="0.0.0.0", port=5000, threaded=True)

@@ -8,6 +8,7 @@ websockets==16.0
 pyyaml==6.0.2
 flask==3.0.3
 scipy==1.10.1
+pyserial==3.5
 
 # MediaPipe FaceLandmarker (with blendshapes) - 替换 open-closed-eye.onnx 的闭眼检测
 # mediapipe 会附带拉 opencv-contrib-python，与上面的 opencv_python 有重叠，但两者共存不影响 import cv2 的使用
