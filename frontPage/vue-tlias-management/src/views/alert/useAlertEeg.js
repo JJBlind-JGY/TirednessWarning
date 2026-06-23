@@ -430,6 +430,47 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     evaluateWarning(binding)
   }
 
+  function markBaselineResetBinding(binding, payload = {}) {
+    binding.eegRunning = true
+    binding.eegStatus = 'calibrating'
+    binding.eegStatusText = '校准中 0%'
+    binding.eegEmotion = 'normal'
+    binding.eegEmotionZh = EMOTION_TEXT.normal
+    binding.eegQualityLevel = ''
+    binding.signalQuality = null
+    binding.reasonCodes = ['baseline_calibrating']
+    binding.features = {}
+    binding.indices = { ...DEFAULT_INDICES }
+    binding.probs = {}
+    binding.calibrationProgress = 0
+    binding.baselineResetReason = payload.baseline_reset_reason || 'manual_detail_reset'
+    binding.baselineResetAt = payload.baseline_reset_at || new Date().toISOString()
+    binding.analysisTime = ''
+    clearEegVisualState(binding)
+    clearCurrentEegPrediction(binding)
+    updateFusionState?.(binding)
+    refreshWaveChart(binding)
+    refreshBandChart(binding)
+    evaluateWarning(binding)
+  }
+
+  async function resetEegBaseline(binding) {
+    if (!binding || binding.workerId == null) throw new Error('未选择脑电设备')
+    const workerId = binding.workerId
+    const response = await fetch(`/eeg/workers/${encodeURIComponent(workerId)}/baseline/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'manual_detail_reset' })
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.message || `脑电基线重置失败: ${response.status}`)
+
+    state.bindings
+      .filter((item) => item.workerId === workerId)
+      .forEach((item) => markBaselineResetBinding(item, payload))
+    return payload
+  }
+
   function resetWaveState(binding) {
     binding.rawWaveBuffer = []
     binding.waveScale = 1
@@ -615,6 +656,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     setChartRef: setWaveChartRef,
     setBandChartRef,
     stopEeg,
+    resetEegBaseline,
     ensureAutoEeg,
     ensureAllAutoEeg,
     disposeChart,

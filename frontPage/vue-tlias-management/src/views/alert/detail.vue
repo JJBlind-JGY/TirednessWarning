@@ -1,6 +1,7 @@
 ﻿<script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
 import { useMonitorCenter } from './useMonitorCenter'
 import {
@@ -24,6 +25,7 @@ const {
   updateBindingPerson,
   updateBindingDevice,
   updateBindingCamera,
+  resetEegBaseline,
   persistBindings,
   getBindingById,
   getDeviceLabel,
@@ -41,6 +43,12 @@ const {
 useMonitorCenterPage()
 
 const binding = computed(() => getBindingById(route.params.id))
+const eegBaselineResetting = ref(false)
+const eegBaselineResetDisabled = computed(() => {
+  const current = binding.value
+  if (!current || current.workerId == null || !current.eegRunning) return true
+  return ['calibrating', 'connecting', 'offline', 'error', 'reconnecting'].includes(current.eegStatus) || eegBaselineResetting.value
+})
 const selectedCamera = computed(() => CAMERA_OPTIONS.find((item) => item.id === binding.value?.faceChannelId))
 const faceStreamUrl = computed(() => selectedCamera.value?.streamUrl || '')
 const versionedFaceStreamUrl = computed(() => {
@@ -78,6 +86,28 @@ const eegVisualPrompt = computed(() => {
 function handlePersonChange() { if (binding.value) { updateBindingPerson(binding.value); persistBindings() } }
 function handleDeviceChange() { if (binding.value) updateBindingDevice(binding.value) }
 function handleFaceChannelChange() { if (binding.value) updateBindingCamera(binding.value) }
+async function handleResetEegBaseline() {
+  if (!binding.value || eegBaselineResetting.value) return
+  try {
+    await ElMessageBox.confirm(
+      '重置后脑电将重新采集约 30 秒基线，期间暂停有效脑电推理。同一脑电设备的其他详情卡片也会同步重新校准。',
+      '重置脑电基线',
+      { confirmButtonText: '确认重置', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch (_) {
+    return
+  }
+
+  eegBaselineResetting.value = true
+  try {
+    await resetEegBaseline(binding.value)
+    ElMessage.success('已重置脑电基线，正在重新校准')
+  } catch (error) {
+    ElMessage.error(error?.message || '脑电基线重置失败')
+  } finally {
+    eegBaselineResetting.value = false
+  }
+}
 function getPortText(workerId) { return DEVICE_OPTIONS.find((item) => item.value === workerId)?.baseUrl || '--' }
 function formatFaceScore(value) { if (value == null || value === '--' || value === '') return '--'; const numeric = Number.parseFloat(String(value).replace('%', '')); return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : String(value) }
 function latestTime(bindingValue) { const value = bindingValue?.analysisTime || bindingValue?.lastValidFaceAt; return value ? formatShortTime(value) : '--:--:--' }
@@ -255,6 +285,7 @@ function closeEyePopup() {
           <h3>脑电波形与状态指数</h3>
           <div class="eeg-actions">
             <el-tag :type="binding.eegRunning ? 'success' : 'info'">{{ getEegStatusLabel(binding) }}</el-tag>
+            <el-button type="warning" plain :loading="eegBaselineResetting" :disabled="eegBaselineResetDisabled" @click="handleResetEegBaseline">重置脑电基线</el-button>
           </div>
         </div>
         <div class="signal-strip">

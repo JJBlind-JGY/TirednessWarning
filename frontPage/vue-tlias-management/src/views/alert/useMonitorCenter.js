@@ -1117,6 +1117,21 @@ function formatShortTime(value) { const date = value ? new Date(value) : new Dat
 function getAlertType(binding) { if (!hasPrediction(binding)) return 'info'; if (binding.emotion === 'normal') return 'success'; if (binding.emotion === 'fatigue' || binding.emotion === 'weakness') return 'error'; return 'warning' }
 function formatIndex(value) { return Number(value || 0).toFixed(1) }
 function refreshFaceSubscription(bindingId) { faceMonitor.refreshFaceSubscription(bindingId) }
+async function resetEegBaseline(binding) {
+  if (!binding) return null
+  const workerId = binding.workerId
+  const payload = await eegMonitor.resetEegBaseline(binding)
+  state.bindings
+    .filter((item) => item.workerId === workerId)
+    .forEach((item) => {
+      const hadCommittedEeg = Number(item.stableSampleCounts?.eeg || 0) > 0
+      clearHistorySamples(item, 'eeg')
+      if (hadCommittedEeg) resetCommittedStateToWaiting(item)
+      updateFusionState(item)
+      evaluateWarning(item)
+    })
+  return payload
+}
 function updateBindingDevice(binding) { if (!binding) return; clearHistorySamples(binding, 'eeg'); eegMonitor.stopEeg(binding.id, 'restart'); persistBindings(); eegMonitor.ensureAutoEeg(binding) }
 function updateBindingCamera(binding) { if (!binding) return; clearHistorySamples(binding, 'face'); faceMonitor.refreshFaceSubscription(binding.id); persistBindings() }
 function startAlertLogDateWatcher() {
@@ -1138,5 +1153,5 @@ function useMonitorCenterPage() {
 const overview = computed(() => ({ total: state.bindings.length, onlineCount: state.bindings.filter(hasAccess).length, warningCount: state.bindings.filter((item) => hasPrediction(item) && getWarningLevel(item) === 'warning').length, dangerCount: state.bindings.filter((item) => hasPrediction(item) && item.emotion !== 'normal').length }))
 
 export function useMonitorCenter() {
-  return { state, DEVICE_OPTIONS, CAMERA_OPTIONS, overview, initMonitorCenter, useMonitorCenterPage, addBinding, removeBinding, addPersonnel, updatePersonnel, removePersonnel, addDevice, updateDevice, removeDevice, addCamera, updateCamera, removeCamera, updateBindingPerson, updateBindingDevice, updateBindingCamera, persistBindings, getBindingById, getDeviceLabel, getCameraLabel, getDisplayEmotion: getDisplayEmotionText, getAccessText, getEegStatusLabel, getFaceStatusLabel, formatShortTime, setChartRef: eegMonitor.setChartRef, setBandChartRef: eegMonitor.setBandChartRef, refreshFaceSubscription, getWarningLevel, getWarningText: getWarningTextDisplay, getAlertType, formatIndex }
+  return { state, DEVICE_OPTIONS, CAMERA_OPTIONS, overview, initMonitorCenter, useMonitorCenterPage, addBinding, removeBinding, addPersonnel, updatePersonnel, removePersonnel, addDevice, updateDevice, removeDevice, addCamera, updateCamera, removeCamera, updateBindingPerson, updateBindingDevice, updateBindingCamera, resetEegBaseline, persistBindings, getBindingById, getDeviceLabel, getCameraLabel, getDisplayEmotion: getDisplayEmotionText, getAccessText, getEegStatusLabel, getFaceStatusLabel, formatShortTime, setChartRef: eegMonitor.setChartRef, setBandChartRef: eegMonitor.setBandChartRef, refreshFaceSubscription, getWarningLevel, getWarningText: getWarningTextDisplay, getAlertType, formatIndex }
 }

@@ -1749,6 +1749,31 @@ def remove_eeg_device(worker_id):
     return {"status": "ok"}
 
 
+@app.post("/eeg/workers/<int:worker_id>/baseline/reset")
+def reset_worker_baseline(worker_id):
+    device_mapping = get_device_mapping()
+    if not device_mapping:
+        return {"status": "error", "message": "no eeg devices configured"}, 404
+    if worker_id not in device_mapping:
+        return {"status": "error", "message": "worker is not configured"}, 404
+
+    payload = request.get_json(silent=True) or {}
+    reason = str(payload.get("reason") or "manual_detail_reset")[:80]
+    try:
+        worker = get_or_create_worker(worker_id)
+        worker.analyzer.reset_baseline(reason)
+        return {
+            "status": "ok",
+            "workerId": worker_id,
+            "baseline_reset_reason": worker.analyzer.baseline_reset_reason,
+            "baseline_reset_at": worker.analyzer.baseline_reset_at,
+            "baseline_ready": worker.analyzer.is_baseline_ready(),
+        }
+    except Exception as exc:
+        logger.warning("manual eeg baseline reset failed | worker=%s error=%s", worker_id, exc)
+        return {"status": "error", "message": str(exc)}, 502
+
+
 @app.route("/eeg/stream")
 def sse_stream():
     requested_worker_id = request.args.get("workerId", default=DEFAULT_WORKER_ID, type=int)
