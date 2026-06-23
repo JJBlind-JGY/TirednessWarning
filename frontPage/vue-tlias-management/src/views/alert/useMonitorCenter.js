@@ -31,10 +31,10 @@ const STABLE_STATE_SEGMENT_MS = 20000
 const EEG_SAMPLE_WEIGHT = 1
 const FACE_SAMPLE_WEIGHT = 0.8
 const FACE_FATIGUE_BOOST = 0.2
-const FACE_MIN_CONFIDENCE = 0.38
+const FACE_MIN_CONFIDENCE = 0.50
 const SEGMENT_MIN_SAMPLES = 3
 const ABNORMAL_MIN_COUNT = 2
-const ABNORMAL_MIN_RATIO = 0.16
+const ABNORMAL_MIN_RATIO = 0.18
 const STABLE_TIE_MARGIN = 0.08
 const EMPTY_SEGMENTS_BEFORE_WAITING = 2
 const EYE_WINDOW_MS = 20000
@@ -595,12 +595,12 @@ function summarizeEyeWindow(binding, now = Date.now()) {
   const cutoff = now - EYE_WINDOW_MS
   let previousSample = null
   const recentSamples = []
-  ;[...binding.eyeSamples].sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0)).forEach((sample) => {
-    const ts = Number(sample.ts || 0)
-    if (!ts || ts > now) return
-    if (ts < cutoff) previousSample = sample
-    else recentSamples.push(sample)
-  })
+    ;[...binding.eyeSamples].sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0)).forEach((sample) => {
+      const ts = Number(sample.ts || 0)
+      if (!ts || ts > now) return
+      if (ts < cutoff) previousSample = sample
+      else recentSamples.push(sample)
+    })
   const samples = previousSample ? [{ ...previousSample, ts: cutoff }, ...recentSamples] : recentSamples
   let totalClosedMs = 0
   let maxContinuousClosedMs = 0
