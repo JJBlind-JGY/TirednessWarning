@@ -4,10 +4,10 @@
     "value": 1,
     "name": "脑电设备 1",
     "transport": "wifi",
-    "baseUrl": "http://10.137.178.196",
+    "baseUrl": "http://192.168.10.24",
     "port": "",
     "baud": 57600,
-    "label": "脑电设备 1 / http://10.137.178.196",
+    "label": "脑电设备 1 / http://192.168.10.24",
     "enabled": true
   },
   {

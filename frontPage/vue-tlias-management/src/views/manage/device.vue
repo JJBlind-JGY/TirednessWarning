@@ -25,7 +25,7 @@ const eegForm = reactive({
   transport: 'wifi',
   baseUrl: '',
   port: '',
-  baud: 57600
+  baud: 460800
 })
 const eegHealth = reactive({})
 let healthTimer = null
@@ -46,7 +46,7 @@ function resetEegForm() {
   eegForm.transport = 'wifi'
   eegForm.baseUrl = ''
   eegForm.port = ''
-  eegForm.baud = 57600
+  eegForm.baud = 460800
 }
 
 function resetCameraForm() {
@@ -306,6 +306,26 @@ async function removeCameraRow(row) {
             </el-form-item>
           </template>
         </div>
+        <el-alert
+          v-if="eegForm.transport === 'serial'"
+          class="eeg-usage-tip"
+          type="info"
+          :closable="false"
+          title="新版 USB 透传固件使用 460800 波特率；旧设备请按原固件手动选择波特率。"
+        />
+        <el-alert
+          v-else
+          class="eeg-usage-tip"
+          type="info"
+          :closable="false"
+          title="WiFi 设备需烧录项目固件，并在同一 2.4 GHz 局域网内配置设备 IP。"
+        />
+        <el-alert
+          class="eeg-usage-tip"
+          type="warning"
+          :closable="false"
+          title="采集前请用酒精清洁皮肤并保持静止。耳夹款：EEG 电极贴额头；三金属电极款：小端轻压头皮并微调至接触稳定。"
+        />
         <div class="form-actions">
           <el-button type="primary" @click="submitEegForm">{{ eegForm.value != null ? '保存脑电设备' : '添加脑电设备' }}</el-button>
           <el-button @click="resetEegForm">重置</el-button>
@@ -479,6 +499,10 @@ async function removeCameraRow(row) {
 
 .form-grid :deep(.el-form-item) {
   margin-bottom: 0;
+}
+
+.eeg-usage-tip {
+  margin-top: 12px;
 }
 
 .form-actions {

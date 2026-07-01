@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import struct
 import sys
 import threading
 import time
@@ -62,6 +63,18 @@ def raw_payload(value):
     return [0x80, 0x02, (value >> 8) & 0xFF, value & 0xFF]
 
 
+def raw_pair_payload(first, second):
+    values = []
+    for value in (first, second):
+        encoded = value & 0xFFFF
+        values.extend([(encoded >> 8) & 0xFF, encoded & 0xFF])
+    return [0x82, 0x04, *values]
+
+
+def power_float_payload(values):
+    return [0x81, 0x20, *struct.pack(">8f", *values)]
+
+
 def power_payload(values):
     payload_bytes = [0x83, 0x18]
     for value in values:
@@ -102,6 +115,33 @@ class FakeDeviceHandler(BaseHTTPRequestHandler):
 class WifiEegWorkerTests(unittest.TestCase):
     def make_worker(self):
         return EEG.EEGWorker(1, "http://127.0.0.1:1")
+
+    def test_tgam_parser_supports_single_and_paired_raw_samples(self):
+        parser = EEG.TGAMParser()
+        packet = tgam_packet(raw_payload(-32768) + raw_pair_payload(32767, -1))
+        events = parser.feed(packet)
+        self.assertEqual([event["value"] for event in events], [-32768, 32767, -1])
+
+    def test_tgam_parser_supports_big_endian_float_power(self):
+        values = (1.25, 2.5, 3.75, 4.0, 5.5, 6.25, 7.75, 8.5)
+        events = EEG.TGAMParser().feed(tgam_packet(power_float_payload(values)))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "eeg_power")
+        self.assertEqual(tuple(events[0]["value"].values()), values)
+
+    def test_tgam_parser_handles_split_packets_and_bad_checksum(self):
+        parser = EEG.TGAMParser()
+        packet = tgam_packet(raw_pair_payload(10, 20))
+        self.assertEqual(parser.feed(packet[:4]), [])
+        self.assertEqual([event["value"] for event in parser.feed(packet[4:])], [10, 20])
+        corrupted = bytearray(tgam_packet(raw_payload(30)))
+        corrupted[-1] ^= 0x01
+        self.assertEqual(parser.feed(corrupted), [])
+
+    def test_tgam_parser_keeps_integer_power_compatible(self):
+        values = [1, 2, 3, 4, 5, 6, 7, 0xFFFFFF]
+        events = EEG.TGAMParser().feed(tgam_packet(power_payload(values)))
+        self.assertEqual(list(events[0]["value"].values()), values)
 
     def test_incremental_samples_are_deduplicated(self):
         worker = self.make_worker()

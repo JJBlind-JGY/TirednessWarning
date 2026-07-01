@@ -7,7 +7,9 @@
 
 #define TGAM_RX_PIN 1
 #define TGAM_TX_PIN 0
-#define TGAM_BAUD 57600
+#define TGAM_BAUD_NORMAL 9600
+#define TGAM_BAUD_RAW 57600
+#define TGAM_CMD_RAW_MODE 0x02
 #define USB_BAUD 115200
 
 static const uint16_t SAMPLE_RATE_HZ = 512;
@@ -19,6 +21,7 @@ static const uint8_t CODE_POOR_SIGNAL = 0x02;
 static const uint8_t CODE_ATTENTION = 0x04;
 static const uint8_t CODE_MEDITATION = 0x05;
 static const uint8_t CODE_RAW = 0x80;
+static const uint8_t CODE_EEG_POWER_FLOAT = 0x81;
 static const uint8_t CODE_RAW_PAIR = 0x82;
 static const uint8_t CODE_EEG_POWER = 0x83;
 static const uint8_t MAX_PAYLOAD_LEN = 169;
@@ -47,6 +50,8 @@ struct EegState
   uint8_t attention = 0;
   uint8_t meditation = 0;
   uint32_t bands[8] = {0};
+  float floatBands[8] = {0};
+  bool bandsAreFloat = false;
 };
 
 EegState eeg;
@@ -69,6 +74,15 @@ static int16_t readInt16(uint8_t high, uint8_t low)
 static uint32_t readUInt24(const uint8_t *value)
 {
   return ((uint32_t)value[0] << 16) | ((uint32_t)value[1] << 8) | value[2];
+}
+
+static float readFloatBigEndian(const uint8_t *value)
+{
+  uint32_t bits = ((uint32_t)value[0] << 24) | ((uint32_t)value[1] << 16) |
+                  ((uint32_t)value[2] << 8) | value[3];
+  float result;
+  memcpy(&result, &bits, sizeof(result));
+  return result;
 }
 
 void appendRaw(int16_t value)
@@ -141,11 +155,21 @@ bool parsePayload(const uint8_t *data, uint8_t length)
         recognized = summaryChanged = true;
       }
       break;
+    case CODE_EEG_POWER_FLOAT:
+      if (valueLength == 32)
+      {
+        for (size_t i = 0; i < 8; i++)
+          eeg.floatBands[i] = readFloatBigEndian(value + i * 4);
+        eeg.bandsAreFloat = true;
+        recognized = summaryChanged = true;
+      }
+      break;
     case CODE_EEG_POWER:
       if (valueLength == 24)
       {
         for (size_t i = 0; i < 8; i++)
           eeg.bands[i] = readUInt24(value + i * 3);
+        eeg.bandsAreFloat = false;
         recognized = summaryChanged = true;
       }
       break;
@@ -214,7 +238,7 @@ void appendBandsJson(String &json)
     json += '"';
     json += names[i];
     json += "\":";
-    json += String(eeg.bands[i]);
+    json += eeg.bandsAreFloat ? String(eeg.floatBands[i], 6) : String(eeg.bands[i]);
   }
   json += '}';
 }
@@ -322,7 +346,7 @@ void handleLegacyDataApi()
     json += ",\"";
     json += legacyBandNames[i];
     json += "\":";
-    json += String(eeg.bands[i]);
+    json += eeg.bandsAreFloat ? String(eeg.floatBands[i], 6) : String(eeg.bands[i]);
   }
   json += ",\"raw_points\":[";
   for (uint32_t index = start; index < nextSampleIndex; index++)
@@ -441,6 +465,64 @@ void serviceWiFi()
   WiFi.begin(EEG_WIFI_SSID, EEG_WIFI_PASSWORD);
 }
 
+void resetTgamParser()
+{
+  parserState = WAIT_AA_1;
+  payloadLength = 0;
+  payloadIndex = 0;
+  payloadSum = 0;
+}
+
+void openTgam(uint32_t baud)
+{
+  TGAMSerial.end();
+  delay(100);
+  resetTgamParser();
+  TGAMSerial.begin(baud, SERIAL_8N1, TGAM_RX_PIN, TGAM_TX_PIN);
+  while (TGAMSerial.available())
+    TGAMSerial.read();
+}
+
+bool detectRawMode(uint32_t timeoutMs)
+{
+  uint32_t initialSamples = nextSampleIndex;
+  uint32_t initialPackets = validPacketCount;
+  uint32_t startedAt = millis();
+  while (millis() - startedAt < timeoutMs)
+  {
+    while (TGAMSerial.available())
+      parseByte((uint8_t)TGAMSerial.read());
+    if (nextSampleIndex > initialSamples || validPacketCount >= initialPackets + 8)
+      return true;
+    delay(1);
+  }
+  return false;
+}
+
+bool ensureTgamRawMode()
+{
+  Serial.println("Testing TGAM at 57600 RAW mode...");
+  openTgam(TGAM_BAUD_RAW);
+  if (detectRawMode(1800))
+    return true;
+
+  for (uint8_t attempt = 0; attempt < 2; attempt++)
+  {
+    Serial.println("Switching TGAM from 9600 to 57600 RAW mode...");
+    openTgam(TGAM_BAUD_NORMAL);
+    delay(1500);
+    while (TGAMSerial.available())
+      TGAMSerial.read();
+    TGAMSerial.write((uint8_t)TGAM_CMD_RAW_MODE);
+    TGAMSerial.flush();
+    delay(900);
+    openTgam(TGAM_BAUD_RAW);
+    if (detectRawMode(3000))
+      return true;
+  }
+  return false;
+}
+
 void setup()
 {
   Serial.begin(USB_BAUD);
@@ -453,7 +535,8 @@ void setup()
   Serial.println(EEG_WIFI_SSID);
   bootId = esp_random();
   TGAMSerial.setRxBufferSize(4096);
-  TGAMSerial.begin(TGAM_BAUD, SERIAL_8N1, TGAM_RX_PIN, TGAM_TX_PIN);
+  if (!ensureTgamRawMode())
+    Serial.println("WARNING: TGAM RAW mode was not detected; continuing for recovery.");
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);

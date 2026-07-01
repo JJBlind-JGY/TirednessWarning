@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import queue
+import struct
 import threading
 import time
 from collections import OrderedDict, deque
@@ -91,6 +92,8 @@ PARSER_CODE_POOR_SIGNAL = 0x02
 PARSER_CODE_ATTENTION = 0x04
 PARSER_CODE_MEDITATION = 0x05
 PARSER_CODE_RAW = 0x80
+PARSER_CODE_EEG_POWER_FLOAT = 0x81
+PARSER_CODE_RAW_PAIR = 0x82
 PARSER_CODE_EEG_POWER = 0x83
 
 
@@ -161,16 +164,21 @@ class TGAMParser:
             i += value_len
 
             if code == PARSER_CODE_RAW and value_len == 2:
-                value = (value_bytes[0] << 8) | value_bytes[1]
-                if value >= 32768:
-                    value -= 65536
-                out.append({"type": "raw", "value": value})
+                out.append({"type": "raw", "value": self._decode_int16(value_bytes)})
+            elif code == PARSER_CODE_RAW_PAIR and value_len == 4:
+                out.extend(
+                    {"type": "raw", "value": self._decode_int16(value_bytes[offset : offset + 2])}
+                    for offset in (0, 2)
+                )
             elif code == PARSER_CODE_POOR_SIGNAL:
                 out.append({"type": "signal", "value": value_bytes[0]})
             elif code == PARSER_CODE_ATTENTION:
                 out.append({"type": "attention", "value": value_bytes[0]})
             elif code == PARSER_CODE_MEDITATION:
                 out.append({"type": "meditation", "value": value_bytes[0]})
+            elif code == PARSER_CODE_EEG_POWER_FLOAT and value_len == 32:
+                powers = struct.unpack(">8f", bytes(value_bytes))
+                out.append({"type": "eeg_power", "value": self._power_mapping(powers)})
             elif code == PARSER_CODE_EEG_POWER and value_len == 24:
                 powers = []
                 for index in range(8):
@@ -178,22 +186,21 @@ class TGAMParser:
                     mid = value_bytes[index * 3 + 1]
                     lo = value_bytes[index * 3 + 2]
                     powers.append((hi << 16) | (mid << 8) | lo)
-                out.append(
-                    {
-                        "type": "eeg_power",
-                        "value": {
-                            "delta": powers[0],
-                            "theta": powers[1],
-                            "low_alpha": powers[2],
-                            "high_alpha": powers[3],
-                            "low_beta": powers[4],
-                            "high_beta": powers[5],
-                            "low_gamma": powers[6],
-                            "mid_gamma": powers[7],
-                        },
-                    }
-                )
+                out.append({"type": "eeg_power", "value": self._power_mapping(powers)})
         return out
+
+    @staticmethod
+    def _decode_int16(value_bytes):
+        value = (value_bytes[0] << 8) | value_bytes[1]
+        return value - 65536 if value >= 32768 else value
+
+    @staticmethod
+    def _power_mapping(powers):
+        names = (
+            "delta", "theta", "low_alpha", "high_alpha",
+            "low_beta", "high_beta", "low_gamma", "mid_gamma",
+        )
+        return dict(zip(names, powers))
 
 
 class EmotionAnalyzer:
