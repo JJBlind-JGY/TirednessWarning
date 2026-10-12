@@ -6,6 +6,7 @@
 #include "wifi_config.h"
 
 #define TGAM_RX_PIN 1
+
 #define TGAM_TX_PIN 0
 #define TGAM_BAUD_NORMAL 9600
 #define TGAM_BAUD_RAW 57600
